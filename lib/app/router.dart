@@ -25,6 +25,7 @@ import 'package:tripcrew/features/trips/presentation/create_trip_screen.dart';
 import 'package:tripcrew/features/trips/presentation/join_trip_screen.dart';
 import 'package:tripcrew/features/trips/presentation/trip_created_screen.dart';
 import 'package:tripcrew/features/trips/presentation/trips_screen.dart';
+import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 import 'package:tripcrew/features/workspace/presentation/trip_workspace_screen.dart';
 
 final rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
@@ -66,15 +67,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) {
           final trip =
               state.extra as TripModel? ??
+              ref.read(tripsProvider).activeTrip ??
               TripModel(
-                id: 'trip_demo',
-                ownerId: 'demo',
-                name: 'Goa Weekend',
-                startingPlace: 'Chennai',
-                destination: 'Goa',
-                startDate: DateTime.now().add(const Duration(days: 7)),
-                endDate: DateTime.now().add(const Duration(days: 10)),
-                inviteCode: 'TRIP-7X92K',
+                id: 'trip_${DateTime.now().millisecondsSinceEpoch}',
+                ownerId: 'owner',
+                name: 'New Trip',
+                startingPlace: 'Origin',
+                destination: 'Destination',
+                startDate: DateTime.now(),
+                endDate: DateTime.now().add(const Duration(days: 3)),
+                inviteCode: 'TRIP-CODE',
                 createdAt: DateTime.now(),
                 updatedAt: DateTime.now(),
               );

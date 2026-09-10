@@ -198,12 +198,28 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
                   children: [
                     _buildSocialButton(
                       icon: Icons.g_mobiledata,
-                      onPressed: () => _quickDemoLogin('google'),
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Google sign-in will be enabled with production OAuth client ID.',
+                            ),
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(width: AppConstants.spaceMd),
                     _buildSocialButton(
                       icon: Icons.apple,
-                      onPressed: () => _quickDemoLogin('apple'),
+                      onPressed: () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Apple sign-in will be enabled with production Apple Services ID.',
+                            ),
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -223,17 +239,6 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
         ),
       ),
     );
-  }
-
-  void _quickDemoLogin(String provider) async {
-    await ref
-        .read(authProvider.notifier)
-        .signUpWithEmail(
-          name: 'Kowshik',
-          email: 'kowshik@tripcrew.app',
-          password: 'password123',
-        );
-    if (mounted) context.go('/');
   }
 
   Widget _buildSocialButton({

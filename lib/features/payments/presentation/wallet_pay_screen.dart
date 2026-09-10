@@ -25,7 +25,7 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('Payment Successful! 🎉'),
+          title: const Text('Sandbox Simulation Complete ✨'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -36,13 +36,14 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                'Paid ${CurrencyFormatter.format(_amount)} to Cafe Coffee Day via TripCrew Wallet.',
+                'Settlement transfer of ${CurrencyFormatter.format(_amount)} simulated in Sandbox mode.',
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
               const Text(
-                'Includes ₹12 platform service fee.',
+                'No real money has moved. Verified 1% platform fee abstraction & signature contracts for Razorpay webhook integration.',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -80,7 +81,38 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
             children: [
               const SizedBox(height: AppConstants.spaceMd),
 
-              // Merchant Card
+              // Sandbox Banner
+              Container(
+                margin: const EdgeInsets.only(bottom: AppConstants.spaceMd),
+                padding: const EdgeInsets.all(AppConstants.spaceMd),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.shield_outlined,
+                      color: Color(0xFFB45309),
+                      size: 18,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Development Sandbox • Simulating settlement flow without live fund movement.',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF92400E),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // Settlement Recipient Card
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(AppConstants.spaceMd),
@@ -90,14 +122,14 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
                         width: 50,
                         height: 50,
                         decoration: BoxDecoration(
-                          color: Colors.brown.shade100,
+                          color: theme.colorScheme.primaryContainer,
                           borderRadius: BorderRadius.circular(
                             AppConstants.radiusMd,
                           ),
                         ),
-                        child: const Icon(
-                          Icons.coffee_rounded,
-                          color: Colors.brown,
+                        child: Icon(
+                          Icons.handshake_rounded,
+                          color: theme.colorScheme.primary,
                           size: 28,
                         ),
                       ),
@@ -107,14 +139,14 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const Text(
-                              'Cafe Coffee Day',
+                              'Crew Settlement',
                               style: TextStyle(
                                 fontWeight: FontWeight.w800,
                                 fontSize: 16,
                               ),
                             ),
                             Text(
-                              'Baga Beach, Goa',
+                              'Peer-to-peer group balance resolution',
                               style: TextStyle(
                                 color: theme.colorScheme.onSurfaceVariant,
                                 fontSize: 13,
@@ -170,7 +202,7 @@ class _WalletPayScreenState extends ConsumerState<WalletPayScreen> {
               _buildPaymentOption(
                 index: 0,
                 title: 'TripCrew Wallet',
-                subtitle: 'Available: ₹5,250',
+                subtitle: 'Sandbox simulated balance',
                 icon: Icons.account_balance_wallet_rounded,
                 color: theme.colorScheme.primary,
               ),

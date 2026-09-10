@@ -132,6 +132,45 @@ class _NearbyExplorerScreenState extends ConsumerState<NearbyExplorerScreen> {
               ),
             ),
 
+            // Development Places Preview Indicator
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppConstants.spaceLg,
+                vertical: 2,
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 14,
+                      color: Color(0xFFB45309),
+                    ),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Development Places Preview • Live Google Places API integration pending key.',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF92400E),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
             // Category Chips
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,

@@ -1,11 +1,16 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/features/itinerary/models/itinerary_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 8: Itinerary timeline screen matching UI design mockup.
+/// Screen 8: Itinerary timeline screen connected to real Firestore trips/{tripId}/itinerary.
 class ItineraryScreen extends ConsumerStatefulWidget {
   const ItineraryScreen({super.key});
 
@@ -15,78 +20,62 @@ class ItineraryScreen extends ConsumerStatefulWidget {
 
 class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
   int _selectedDay = 1;
+  StreamSubscription? _sub;
+  List<ItineraryItem> _items = [];
+  bool _isLoading = true;
 
-  final List<ItineraryItem> _items = [
-    const ItineraryItem(
-      id: 'it_1',
-      dayNumber: 1,
-      time: '07:00 AM',
-      title: 'Start from Chennai',
-      notes: 'Meet at Central Station pickup point',
-      order: 1,
-    ),
-    const ItineraryItem(
-      id: 'it_2',
-      dayNumber: 1,
-      time: '12:30 PM',
-      title: 'Lunch Stop',
-      placeName: 'Highway Dhaba',
-      order: 2,
-    ),
-    const ItineraryItem(
-      id: 'it_3',
-      dayNumber: 1,
-      time: '03:00 PM',
-      title: 'Baga Beach',
-      placeName: 'North Goa',
-      notes: 'Check-in and beach walk',
-      order: 3,
-    ),
-    const ItineraryItem(
-      id: 'it_4',
-      dayNumber: 1,
-      time: '06:30 PM',
-      title: 'Sunset Point',
-      placeName: 'Anjuna Clifftop',
-      order: 4,
-    ),
-    const ItineraryItem(
-      id: 'it_5',
-      dayNumber: 1,
-      time: '08:00 PM',
-      title: 'Dinner',
-      placeName: 'Britto’s Shack',
-      order: 5,
-    ),
-    const ItineraryItem(
-      id: 'it_6',
-      dayNumber: 2,
-      time: '08:30 AM',
-      title: 'Scuba Diving & Watersports',
-      placeName: 'Grand Island',
-      order: 1,
-    ),
-    const ItineraryItem(
-      id: 'it_7',
-      dayNumber: 2,
-      time: '02:00 PM',
-      title: 'Old Goa Churches & Spice Farm',
-      placeName: 'Old Goa',
-      order: 2,
-    ),
-    const ItineraryItem(
-      id: 'it_8',
-      dayNumber: 3,
-      time: '10:00 AM',
-      title: 'Flea Market & Souvenir Shopping',
-      placeName: 'Anjuna Market',
-      order: 1,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _listenToItinerary();
+  }
 
-  void _showAddActivityDialog() {
+  void _listenToItinerary() {
+    final activeTrip = ref.read(activeTripProvider);
+    if (activeTrip == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    if (FirebaseService.isInitialized) {
+      _sub = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(activeTrip.id)
+          .collection('itinerary')
+          .orderBy('order')
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final loaded = snapshot.docs
+                  .map((doc) => ItineraryItem.fromMap(doc.data(), doc.id))
+                  .toList();
+
+              if (mounted) {
+                setState(() {
+                  _items = loaded;
+                  _isLoading = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted) setState(() => _isLoading = false);
+            },
+          );
+    } else {
+      // Local fallback
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _showAddActivityDialog(String tripId) {
     final titleCtrl = TextEditingController();
-    final timeCtrl = TextEditingController(text: '11:00 AM');
+    final timeCtrl = TextEditingController(text: '10:00 AM');
     final placeCtrl = TextEditingController();
 
     showDialog(
@@ -122,23 +111,32 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               if (titleCtrl.text.trim().isNotEmpty) {
-                setState(() {
-                  _items.add(
-                    ItineraryItem(
-                      id: 'it_${DateTime.now().millisecondsSinceEpoch}',
-                      dayNumber: _selectedDay,
-                      time: timeCtrl.text,
-                      title: titleCtrl.text.trim(),
-                      placeName: placeCtrl.text.trim().isEmpty
-                          ? null
-                          : placeCtrl.text.trim(),
-                      order: _items.length + 1,
-                    ),
-                  );
-                });
-                Navigator.pop(ctx);
+                final newItem = ItineraryItem(
+                  id: 'it_${DateTime.now().millisecondsSinceEpoch}',
+                  dayNumber: _selectedDay,
+                  time: timeCtrl.text,
+                  title: titleCtrl.text.trim(),
+                  placeName: placeCtrl.text.trim().isEmpty
+                      ? null
+                      : placeCtrl.text.trim(),
+                  order: _items.length + 1,
+                );
+
+                if (FirebaseService.isInitialized) {
+                  await FirebaseFirestore.instance
+                      .collection('trips')
+                      .doc(tripId)
+                      .collection('itinerary')
+                      .doc(newItem.id)
+                      .set(newItem.toMap());
+                } else {
+                  setState(() => _items.add(newItem));
+                }
+
+                await AnalyticsService.logItineraryItemAdded(tripId);
+                if (ctx.mounted) Navigator.pop(ctx);
               }
             },
             child: const Text('Add Activity'),
@@ -148,11 +146,38 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
     );
   }
 
+  void _toggleVisited(ItineraryItem item, String tripId) async {
+    if (FirebaseService.isInitialized) {
+      await FirebaseFirestore.instance
+          .collection('trips')
+          .doc(tripId)
+          .collection('itinerary')
+          .doc(item.id)
+          .update({'isVisited': !item.isVisited});
+    } else {
+      setState(() {
+        final idx = _items.indexWhere((i) => i.id == item.id);
+        if (idx != -1) {
+          _items[idx] = item.copyWith(isVisited: !item.isVisited);
+        }
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final activeTrip = ref.watch(activeTripProvider);
+
+    if (activeTrip == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Itinerary')),
+        body: const Center(child: Text('No active trip selected.')),
+      );
+    }
+
     final dayItems = _items.where((i) => i.dayNumber == _selectedDay).toList();
+    final maxDays = activeTrip.durationDays > 0 ? activeTrip.durationDays : 3;
 
     return Scaffold(
       appBar: AppBar(
@@ -187,14 +212,14 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        activeTrip?.name ?? 'Goa Trip',
+                        activeTrip.name,
                         style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 16,
                         ),
                       ),
                       Text(
-                        '15 - 17 Oct 2024',
+                        '${activeTrip.startingPlace} → ${activeTrip.destination}',
                         style: TextStyle(
                           color: theme.colorScheme.onSurfaceVariant,
                           fontSize: 12,
@@ -215,33 +240,10 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
               ),
               child: Row(
                 children: [
-                  _buildDayTab(1),
-                  const SizedBox(width: AppConstants.spaceSm),
-                  _buildDayTab(2),
-                  const SizedBox(width: AppConstants.spaceSm),
-                  _buildDayTab(3),
-                  const SizedBox(width: AppConstants.spaceSm),
-                  InkWell(
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Add Day functionality')),
-                      );
-                    },
-                    borderRadius: BorderRadius.circular(20),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: theme.colorScheme.outlineVariant,
-                        ),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Icon(Icons.add, size: 16),
-                    ),
-                  ),
+                  for (int d = 1; d <= maxDays; d++) ...[
+                    _buildDayTab(d),
+                    const SizedBox(width: AppConstants.spaceSm),
+                  ],
                 ],
               ),
             ),
@@ -249,9 +251,17 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
 
             // Timeline Items
             Expanded(
-              child: dayItems.isEmpty
-                  ? const Center(
-                      child: Text('No activities added for this day.'),
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : dayItems.isEmpty
+                  ? AppEmptyState(
+                      icon: Icons.event_available_outlined,
+                      title: 'No activities for Day $_selectedDay',
+                      message:
+                          'Tap "+ Add Activity" below to plan stops for this day.',
+                      actionLabel: 'Add Stop',
+                      onActionPressed: () =>
+                          _showAddActivityDialog(activeTrip.id),
                     )
                   : ListView.builder(
                       padding: const EdgeInsets.symmetric(
@@ -276,23 +286,38 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                             // Timeline Axis
                             Column(
                               children: [
-                                Container(
-                                  width: 14,
-                                  height: 14,
-                                  decoration: BoxDecoration(
-                                    color: nodeColor,
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
-                                    ),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: nodeColor.withValues(alpha: 0.3),
-                                        blurRadius: 4,
-                                        spreadRadius: 1,
+                                InkWell(
+                                  onTap: () =>
+                                      _toggleVisited(item, activeTrip.id),
+                                  child: Container(
+                                    width: 18,
+                                    height: 18,
+                                    decoration: BoxDecoration(
+                                      color: item.isVisited
+                                          ? const Color(0xFF10B981)
+                                          : nodeColor,
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
                                       ),
-                                    ],
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: nodeColor.withValues(
+                                            alpha: 0.3,
+                                          ),
+                                          blurRadius: 4,
+                                          spreadRadius: 1,
+                                        ),
+                                      ],
+                                    ),
+                                    child: item.isVisited
+                                        ? const Icon(
+                                            Icons.check,
+                                            size: 12,
+                                            color: Colors.white,
+                                          )
+                                        : null,
                                   ),
                                 ),
                                 if (!isLast)
@@ -325,9 +350,12 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                                     const SizedBox(height: 2),
                                     Text(
                                       item.title,
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontWeight: FontWeight.w700,
                                         fontSize: 15,
+                                        decoration: item.isVisited
+                                            ? TextDecoration.lineThrough
+                                            : TextDecoration.none,
                                       ),
                                     ),
                                     if (item.placeName != null) ...[
@@ -358,7 +386,7 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _showAddActivityDialog,
+                  onPressed: () => _showAddActivityDialog(activeTrip.id),
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Add Activity'),
                 ),

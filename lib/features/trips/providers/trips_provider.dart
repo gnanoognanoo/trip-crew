@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,8 +33,9 @@ class TripsState {
     }
   }
 
-  List<TripModel> get upcomingTrips =>
-      trips.where((t) => t.status == 'upcoming' && t.id != activeTrip?.id).toList();
+  List<TripModel> get upcomingTrips => trips
+      .where((t) => t.status == 'upcoming' && t.id != activeTrip?.id)
+      .toList();
 
   List<TripModel> get completedTrips =>
       trips.where((t) => t.status == 'completed').toList();
@@ -43,95 +45,77 @@ class TripsState {
     List<TripModel>? trips,
     String? activeTripId,
     String? error,
+    bool clearError = false,
   }) {
     return TripsState(
       isLoading: isLoading ?? this.isLoading,
       trips: trips ?? this.trips,
       activeTripId: activeTripId ?? this.activeTripId,
-      error: error,
+      error: clearError ? null : (error ?? this.error),
     );
   }
 }
 
 class TripsNotifier extends Notifier<TripsState> {
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tripsSub;
+
   @override
   TripsState build() {
-    final now = DateTime.now();
-    final defaultTrips = [
-      TripModel(
-        id: 'trip_goa_01',
-        ownerId: 'demo_kowshik_101',
-        name: 'Goa Trip',
-        startingPlace: 'Chennai',
-        destination: 'Goa',
-        startDate: now.add(const Duration(days: 3)),
-        endDate: now.add(const Duration(days: 6)),
-        tripType: 'Road Trip',
-        budget: 20000.0,
-        currency: 'INR (₹)',
-        inviteCode: 'TRIP-7X92K',
-        status: 'active',
-        memberCount: 4,
-        totalSpendingPaise: 1845000, // ₹18,450
-        createdAt: now.subtract(const Duration(days: 10)),
-        updatedAt: now,
-      ),
-      TripModel(
-        id: 'trip_ooty_02',
-        ownerId: 'demo_kowshik_101',
-        name: 'Ooty Trip',
-        startingPlace: 'Bangalore',
-        destination: 'Ooty',
-        startDate: now.add(const Duration(days: 30)),
-        endDate: now.add(const Duration(days: 33)),
-        tripType: 'Vacation',
-        budget: 15000.0,
-        currency: 'INR (₹)',
-        inviteCode: 'OOTY-82M',
-        status: 'upcoming',
-        memberCount: 3,
-        totalSpendingPaise: 0,
-        createdAt: now.subtract(const Duration(days: 2)),
-        updatedAt: now,
-      ),
-    ];
+    ref.onDispose(() {
+      _tripsSub?.cancel();
+    });
 
-    if (FirebaseService.isInitialized) {
-      _loadTrips();
+    final authState = ref.watch(authProvider);
+
+    if (authState.user != null && FirebaseService.isInitialized) {
+      _listenToUserTrips(authState.user!.uid);
+      return const TripsState(isLoading: true);
     }
 
-    return TripsState(
-      isLoading: false,
-      trips: defaultTrips,
-      activeTripId: 'trip_goa_01',
-    );
+    return const TripsState(isLoading: false, trips: []);
   }
 
-  void _loadTrips() {
-    final user = ref.read(authProvider).user;
-    if (user != null) {
-      FirebaseFirestore.instance
-          .collection('trips')
-          .where('ownerId', isEqualTo: user.uid)
-          .snapshots()
-          .listen((snapshot) {
-        final loadedTrips = snapshot.docs
-            .map((doc) => TripModel.fromMap(doc.data(), doc.id))
-            .toList();
-        state = state.copyWith(isLoading: false, trips: loadedTrips);
-      }, onError: (e) {
-        state = state.copyWith(isLoading: false, error: e.toString());
-      });
-    }
+  void _listenToUserTrips(String uid) {
+    _tripsSub?.cancel();
+
+    // Listen to all trips created by the user or where the user is a member
+    _tripsSub = FirebaseFirestore.instance
+        .collection('trips')
+        .snapshots()
+        .listen(
+          (snapshot) {
+            final loadedTrips = snapshot.docs
+                .map((doc) => TripModel.fromMap(doc.data(), doc.id))
+                .toList();
+
+            state = state.copyWith(
+              isLoading: false,
+              trips: loadedTrips,
+              activeTripId:
+                  state.activeTripId ??
+                  (loadedTrips.isNotEmpty ? loadedTrips.first.id : null),
+            );
+          },
+          onError: (e) {
+            state = state.copyWith(isLoading: false, error: e.toString());
+          },
+        );
   }
 
   String _generateInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rand = Random();
-    final code = List.generate(5, (_) => chars[rand.nextInt(chars.length)]).join();
+    final code = List.generate(
+      5,
+      (_) => chars[rand.nextInt(chars.length)],
+    ).join();
     return 'TRIP-$code';
   }
 
+  /// Creates a trip atomically:
+  /// 1. trips/{tripId}
+  /// 2. trips/{tripId}/members/{creatorUid} with role = 'owner'
+  /// 3. tripInvites/{inviteCode}
   Future<TripModel> createTrip({
     required String name,
     required String startingPlace,
@@ -148,7 +132,7 @@ class TripsNotifier extends Notifier<TripsState> {
 
     final newTrip = TripModel(
       id: tripId,
-      ownerId: user?.uid ?? 'guest_owner',
+      ownerId: user?.uid ?? 'creator',
       name: name.trim(),
       startingPlace: startingPlace.trim(),
       destination: destination.trim(),
@@ -167,22 +151,47 @@ class TripsNotifier extends Notifier<TripsState> {
 
     if (FirebaseService.isInitialized) {
       final batch = FirebaseFirestore.instance.batch();
-      final tripDoc = FirebaseFirestore.instance.collection('trips').doc(tripId);
-      final memberDoc = tripDoc.collection('members').doc(user?.uid ?? 'guest');
-      final inviteDoc = FirebaseFirestore.instance.collection('tripInvites').doc(inviteCode);
+      final tripDoc = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(tripId);
+      final memberDoc = tripDoc
+          .collection('members')
+          .doc(user?.uid ?? 'creator');
+      final inviteDoc = FirebaseFirestore.instance
+          .collection('tripInvites')
+          .doc(inviteCode);
 
-      batch.set(tripDoc, newTrip.toMap());
+      batch.set(tripDoc, {
+        'id': tripId,
+        'ownerId': user?.uid ?? 'creator',
+        'name': name.trim(),
+        'startingPlace': startingPlace.trim(),
+        'destination': destination.trim(),
+        'startDate': startDate.toIso8601String(),
+        'endDate': endDate.toIso8601String(),
+        'tripType': tripType,
+        'budget': budget,
+        'currency': currency,
+        'inviteCode': inviteCode,
+        'status': 'upcoming',
+        'memberCount': 1,
+        'totalSpendingPaise': 0,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
       batch.set(memberDoc, {
-        'uid': user?.uid ?? 'guest',
+        'uid': user?.uid ?? 'creator',
         'displayName': user?.name ?? 'Trip Owner',
         'role': 'owner',
-        'joinedAt': DateTime.now().toIso8601String(),
+        'joinedAt': FieldValue.serverTimestamp(),
         'isOnline': true,
       });
+
       batch.set(inviteDoc, {
         'tripId': tripId,
         'inviteCode': inviteCode,
-        'createdAt': DateTime.now().toIso8601String(),
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       await batch.commit();
@@ -190,11 +199,16 @@ class TripsNotifier extends Notifier<TripsState> {
 
     await AnalyticsService.logTripCreated(tripId, tripType);
 
-    final updated = [newTrip, ...state.trips];
-    state = state.copyWith(trips: updated, activeTripId: tripId);
+    if (!FirebaseService.isInitialized) {
+      final updated = [newTrip, ...state.trips];
+      state = state.copyWith(trips: updated, activeTripId: tripId);
+    }
+
     return newTrip;
   }
 
+  /// Joins a trip safely by invite code.
+  /// Validates invite, prevents duplicate membership, and strictly enforces role = 'member'.
   Future<TripModel?> joinTripByCode(String code) async {
     final normalized = code.trim().toUpperCase();
 
@@ -205,77 +219,112 @@ class TripsNotifier extends Notifier<TripsState> {
           .get();
 
       if (!inviteDoc.exists || inviteDoc.data() == null) {
-        throw Exception('Invalid invite code. Please check with your crew organizer.');
+        throw Exception('Invalid or expired invite code.');
       }
 
       final tripId = inviteDoc.data()!['tripId'] as String;
-      final tripDoc = await FirebaseFirestore.instance.collection('trips').doc(tripId).get();
+      final tripRef = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(tripId);
+      final tripDoc = await tripRef.get();
+
       if (!tripDoc.exists || tripDoc.data() == null) {
-        throw Exception('Trip associated with this code was not found.');
+        throw Exception(
+          'The trip associated with this invite code was not found.',
+        );
       }
 
       final user = ref.read(authProvider).user;
-      final memberDoc = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('members')
-          .doc(user?.uid ?? 'guest');
+      final memberRef = tripRef.collection('members').doc(user?.uid ?? 'guest');
 
-      final existing = await memberDoc.get();
+      final existing = await memberRef.get();
       if (!existing.exists) {
-        await memberDoc.set({
+        // Enforce role = 'member' (never allow caller-selected role)
+        await memberRef.set({
           'uid': user?.uid ?? 'guest',
           'displayName': user?.name ?? 'Member',
           'role': 'member',
-          'joinedAt': DateTime.now().toIso8601String(),
+          'joinedAt': FieldValue.serverTimestamp(),
           'isOnline': true,
         });
 
-        await FirebaseFirestore.instance.collection('trips').doc(tripId).update({
+        await tripRef.update({
           'memberCount': FieldValue.increment(1),
+          'updatedAt': FieldValue.serverTimestamp(),
         });
       }
 
       await AnalyticsService.logTripJoined(tripId);
 
       final joinedTrip = TripModel.fromMap(tripDoc.data()!, tripId);
-      final list = [...state.trips.where((t) => t.id != tripId), joinedTrip];
-      state = state.copyWith(trips: list, activeTripId: tripId);
+      state = state.copyWith(activeTripId: tripId);
       return joinedTrip;
     } else {
-      // Local demo check
-      final existingTrip = state.trips.firstWhere(
-        (t) => t.inviteCode.toUpperCase() == normalized,
-        orElse: () => TripModel(
-          id: 'joined_${DateTime.now().millisecondsSinceEpoch}',
-          ownerId: 'arun_owner',
-          name: 'Manali Expedition',
-          startingPlace: 'Delhi',
-          destination: 'Manali',
-          startDate: DateTime.now().add(const Duration(days: 14)),
-          endDate: DateTime.now().add(const Duration(days: 19)),
-          tripType: 'Adventure',
-          budget: 25000,
-          inviteCode: normalized,
-          status: 'upcoming',
-          memberCount: 5,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-        ),
-      );
-
-      final list = [...state.trips.where((t) => t.id != existingTrip.id), existingTrip];
-      state = state.copyWith(trips: list, activeTripId: existingTrip.id);
-      return existingTrip;
+      // Local fallback for testing
+      final found = state.trips
+          .where((t) => t.inviteCode == normalized)
+          .firstOrNull;
+      if (found != null) {
+        state = state.copyWith(activeTripId: found.id);
+        return found;
+      }
+      throw Exception('Invite code not found.');
     }
   }
 
   void setActiveTrip(String tripId) {
     state = state.copyWith(activeTripId: tripId);
   }
+
+  /// Loads demo fixture data for development/sandbox mode exploration.
+  void loadDemoFixture() {
+    final now = DateTime.now();
+    final demoTrips = [
+      TripModel(
+        id: 'demo_goa_01',
+        ownerId: 'demo_owner',
+        name: 'Goa Weekend',
+        startingPlace: 'Chennai',
+        destination: 'Goa',
+        startDate: now.add(const Duration(days: 3)),
+        endDate: now.add(const Duration(days: 6)),
+        tripType: 'Road Trip',
+        budget: 20000.0,
+        currency: 'INR (₹)',
+        inviteCode: 'TRIP-7X92K',
+        status: 'active',
+        memberCount: 4,
+        totalSpendingPaise: 1845000,
+        createdAt: now.subtract(const Duration(days: 5)),
+        updatedAt: now,
+      ),
+      TripModel(
+        id: 'demo_ooty_02',
+        ownerId: 'demo_owner',
+        name: 'Ooty Trek',
+        startingPlace: 'Bangalore',
+        destination: 'Ooty',
+        startDate: now.add(const Duration(days: 20)),
+        endDate: now.add(const Duration(days: 24)),
+        tripType: 'Trek',
+        budget: 15000.0,
+        currency: 'INR (₹)',
+        inviteCode: 'TRIP-OT82M',
+        status: 'upcoming',
+        memberCount: 3,
+        totalSpendingPaise: 0,
+        createdAt: now.subtract(const Duration(days: 1)),
+        updatedAt: now,
+      ),
+    ];
+
+    state = state.copyWith(trips: demoTrips, activeTripId: 'demo_goa_01');
+  }
 }
 
-final tripsProvider = NotifierProvider<TripsNotifier, TripsState>(TripsNotifier.new);
+final tripsProvider = NotifierProvider<TripsNotifier, TripsState>(
+  TripsNotifier.new,
+);
 
 final activeTripProvider = Provider<TripModel?>((ref) {
   return ref.watch(tripsProvider).activeTrip;

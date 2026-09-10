@@ -1,13 +1,19 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
+import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/expenses/models/expense_model.dart';
 import 'package:tripcrew/features/expenses/utils/settlement_calculator.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 10: Expense Tracker screen matching UI design mockup.
+/// Screen 10: Expense Tracker screen connected to real Firestore trips/{tripId}/expenses.
 class ExpensesScreen extends ConsumerStatefulWidget {
   const ExpensesScreen({super.key});
 
@@ -17,86 +23,89 @@ class ExpensesScreen extends ConsumerStatefulWidget {
 
 class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   int _selectedTab = 0; // 0: All, 1: My Expenses, 2: Settlements
+  StreamSubscription? _expensesSub;
+  StreamSubscription? _membersSub;
 
-  final List<ExpenseModel> _expenses = [
-    ExpenseModel(
-      id: 'e1',
-      description: 'Resort Stay & Booking',
-      amountPaise: 800000, // ₹8,000
-      category: 'Stay',
-      paidByUid: 'demo_kowshik_101',
-      paidByName: 'Kowshik',
-      participantUids: [
-        'demo_kowshik_101',
-        'user_arun_102',
-        'user_rahul_103',
-        'user_praveen_104',
-      ],
-      createdBy: 'demo_kowshik_101',
-      createdAt: DateTime(2024, 10, 15, 12, 0),
-    ),
-    ExpenseModel(
-      id: 'e2',
-      description: 'Fuel & Highway Tolls',
-      amountPaise: 430000, // ₹4,300
-      category: 'Fuel',
-      paidByUid: 'user_arun_102',
-      paidByName: 'Arun',
-      participantUids: [
-        'demo_kowshik_101',
-        'user_arun_102',
-        'user_rahul_103',
-        'user_praveen_104',
-      ],
-      createdBy: 'user_arun_102',
-      createdAt: DateTime(2024, 10, 15, 16, 30),
-    ),
-    ExpenseModel(
-      id: 'e3',
-      description: 'Beachside Dinner & Drinks',
-      amountPaise: 400000, // ₹4,000
-      category: 'Food',
-      paidByUid: 'user_praveen_104',
-      paidByName: 'Praveen',
-      participantUids: [
-        'demo_kowshik_101',
-        'user_arun_102',
-        'user_rahul_103',
-        'user_praveen_104',
-      ],
-      createdBy: 'user_praveen_104',
-      createdAt: DateTime(2024, 10, 15, 21, 0),
-    ),
-    ExpenseModel(
-      id: 'e4',
-      description: 'Scuba Diving Passes',
-      amountPaise: 215000, // ₹2,150
-      category: 'Tickets',
-      paidByUid: 'user_rahul_103',
-      paidByName: 'Rahul',
-      participantUids: [
-        'demo_kowshik_101',
-        'user_arun_102',
-        'user_rahul_103',
-        'user_praveen_104',
-      ],
-      createdBy: 'user_rahul_103',
-      createdAt: DateTime(2024, 10, 16, 10, 0),
-    ),
-  ];
+  List<ExpenseModel> _expenses = [];
+  Map<String, String> _memberNames = {};
+  bool _isLoading = true;
 
-  final Map<String, String> _memberNames = {
-    'demo_kowshik_101': 'Kowshik',
-    'user_arun_102': 'Arun',
-    'user_rahul_103': 'Rahul',
-    'user_praveen_104': 'Praveen',
-  };
+  @override
+  void initState() {
+    super.initState();
+    _listenToExpensesAndMembers();
+  }
 
-  void _showAddExpenseDialog() {
+  void _listenToExpensesAndMembers() {
+    final activeTrip = ref.read(activeTripProvider);
+    if (activeTrip == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    if (FirebaseService.isInitialized) {
+      // Listen to members
+      _membersSub = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(activeTrip.id)
+          .collection('members')
+          .snapshots()
+          .listen((snapshot) {
+            final map = <String, String>{};
+            for (final doc in snapshot.docs) {
+              map[doc.id] = doc.data()['displayName'] as String? ?? 'Member';
+            }
+            if (mounted) setState(() => _memberNames = map);
+          });
+
+      // Listen to expenses
+      _expensesSub = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(activeTrip.id)
+          .collection('expenses')
+          .orderBy('createdAt', descending: true)
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final loaded = snapshot.docs
+                  .map((doc) => ExpenseModel.fromMap(doc.data(), doc.id))
+                  .toList();
+
+              if (mounted) {
+                setState(() {
+                  _expenses = loaded;
+                  _isLoading = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted) setState(() => _isLoading = false);
+            },
+          );
+    } else {
+      final user = ref.read(authProvider).user;
+      setState(() {
+        _memberNames = {user?.uid ?? 'creator': user?.name ?? 'You'};
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _expensesSub?.cancel();
+    _membersSub?.cancel();
+    super.dispose();
+  }
+
+  void _showAddExpenseDialog(String tripId) {
     final descCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
     String category = 'Food';
-    String paidBy = 'demo_kowshik_101';
+    final user = ref.read(authProvider).user;
+    String paidBy =
+        user?.uid ??
+        (_memberNames.keys.isNotEmpty ? _memberNames.keys.first : 'self');
 
     showDialog(
       context: context,
@@ -115,7 +124,9 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: amountCtrl,
-                keyboardType: TextInputType.number,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
                   labelText: 'Amount (₹)',
                   prefixText: '₹ ',
@@ -137,17 +148,22 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 onChanged: (val) => setDialogState(() => category = val!),
               ),
               const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                initialValue: paidBy,
-                decoration: const InputDecoration(labelText: 'Paid By'),
-                items: _memberNames.entries
-                    .map(
-                      (e) =>
-                          DropdownMenuItem(value: e.key, child: Text(e.value)),
-                    )
-                    .toList(),
-                onChanged: (val) => setDialogState(() => paidBy = val!),
-              ),
+              if (_memberNames.isNotEmpty)
+                DropdownButtonFormField<String>(
+                  initialValue: _memberNames.containsKey(paidBy)
+                      ? paidBy
+                      : _memberNames.keys.first,
+                  decoration: const InputDecoration(labelText: 'Paid By'),
+                  items: _memberNames.entries
+                      .map(
+                        (e) => DropdownMenuItem(
+                          value: e.key,
+                          child: Text(e.value),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (val) => setDialogState(() => paidBy = val!),
+                ),
             ],
           ),
           actions: [
@@ -156,25 +172,49 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 final amount = double.tryParse(amountCtrl.text) ?? 0.0;
                 if (descCtrl.text.trim().isNotEmpty && amount > 0) {
-                  setState(() {
-                    _expenses.add(
-                      ExpenseModel(
-                        id: 'e_${DateTime.now().millisecondsSinceEpoch}',
-                        description: descCtrl.text.trim(),
-                        amountPaise: CurrencyFormatter.toSmallestUnit(amount),
-                        category: category,
-                        paidByUid: paidBy,
-                        paidByName: _memberNames[paidBy] ?? 'Member',
-                        participantUids: _memberNames.keys.toList(),
-                        createdBy: 'demo_kowshik_101',
-                        createdAt: DateTime.now(),
-                      ),
-                    );
-                  });
-                  Navigator.pop(ctx);
+                  final amountPaise = CurrencyFormatter.toSmallestUnit(amount);
+                  final payerName =
+                      _memberNames[paidBy] ?? user?.name ?? 'Member';
+
+                  final newExpense = ExpenseModel(
+                    id: 'e_${DateTime.now().millisecondsSinceEpoch}',
+                    description: descCtrl.text.trim(),
+                    amountPaise: amountPaise,
+                    category: category,
+                    paidByUid: paidBy,
+                    paidByName: payerName,
+                    participantUids: _memberNames.keys.toList(),
+                    createdBy: user?.uid ?? 'guest',
+                    createdAt: DateTime.now(),
+                  );
+
+                  if (FirebaseService.isInitialized) {
+                    final batch = FirebaseFirestore.instance.batch();
+                    final expenseRef = FirebaseFirestore.instance
+                        .collection('trips')
+                        .doc(tripId)
+                        .collection('expenses')
+                        .doc(newExpense.id);
+                    final tripRef = FirebaseFirestore.instance
+                        .collection('trips')
+                        .doc(tripId);
+
+                    batch.set(expenseRef, newExpense.toMap());
+                    batch.update(tripRef, {
+                      'totalSpendingPaise': FieldValue.increment(amountPaise),
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+
+                    await batch.commit();
+                  } else {
+                    setState(() => _expenses.insert(0, newExpense));
+                  }
+
+                  await AnalyticsService.logExpenseAdded(tripId, amount);
+                  if (ctx.mounted) Navigator.pop(ctx);
                 }
               },
               child: const Text('Add Expense'),
@@ -189,13 +229,25 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final activeTrip = ref.watch(activeTripProvider);
+    final currentUser = ref.watch(authProvider).user;
 
-    // Calculate member spending totals
+    if (activeTrip == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Expenses')),
+        body: const Center(child: Text('No active trip selected.')),
+      );
+    }
+
+    final filteredExpenses = _selectedTab == 1
+        ? _expenses.where((e) => e.paidByUid == currentUser?.uid).toList()
+        : _expenses;
+
+    // Calculate totals dynamically
+    int totalPaise = 0;
     final Map<String, int> memberSpending = {};
     for (final m in _memberNames.keys) {
       memberSpending[m] = 0;
     }
-    int totalPaise = 0;
     for (final exp in _expenses) {
       totalPaise += exp.amountPaise;
       memberSpending[exp.paidByUid] =
@@ -266,7 +318,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${activeTrip?.name ?? 'Goa Trip'} • ${_expenses.length} transactions',
+                          '${activeTrip.name} • ${_expenses.length} ${_expenses.length == 1 ? "expense" : "expenses"}',
                           style: TextStyle(
                             fontSize: 12,
                             color: theme.colorScheme.onSurfaceVariant,
@@ -278,67 +330,76 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 ),
               ),
 
-              // Members Breakdown List
+              // Expenses List
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: AppConstants.spaceLg,
-                    vertical: 8,
-                  ),
-                  children: [
-                    Text(
-                      _selectedTab == 0
-                          ? 'Member Contributions'
-                          : 'My Logged Expenses',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: AppConstants.spaceSm),
-                    Card(
-                      child: Column(
-                        children: _memberNames.entries.map((entry) {
-                          final spentPaise = memberSpending[entry.key] ?? 0;
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : filteredExpenses.isEmpty
+                    ? AppEmptyState(
+                        icon: Icons.receipt_long_rounded,
+                        title: _selectedTab == 1
+                            ? 'No expenses logged by you'
+                            : 'No expenses recorded',
+                        message:
+                            'Tap "+ Add Expense" below to start tracking shared crew costs.',
+                        actionLabel: 'Add Expense',
+                        onActionPressed: () =>
+                            _showAddExpenseDialog(activeTrip.id),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: AppConstants.spaceLg,
+                          vertical: 8,
+                        ),
+                        itemCount: filteredExpenses.length,
+                        separatorBuilder: (_, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final exp = filteredExpenses[index];
                           return ListTile(
                             leading: CircleAvatar(
                               backgroundColor:
                                   theme.colorScheme.primaryContainer,
-                              child: Text(
-                                entry.value[0],
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                  color: theme.colorScheme.primary,
-                                ),
+                              child: Icon(
+                                _getCategoryIcon(exp.category),
+                                color: theme.colorScheme.primary,
+                                size: 20,
                               ),
                             ),
                             title: Text(
-                              entry.value,
+                              exp.description,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             subtitle: Text(
-                              'Equal Split • ${activeTrip?.name ?? 'Trip'}',
+                              'Paid by ${exp.paidByName} • Equal Split',
+                              style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
                             ),
                             trailing: Text(
-                              CurrencyFormatter.formatUnits(spentPaise),
+                              CurrencyFormatter.formatUnits(exp.amountPaise),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w800,
-                                fontSize: 16,
+                                fontSize: 15,
                               ),
                             ),
                           );
-                        }).toList(),
+                        },
                       ),
-                    ),
-                  ],
-                ),
               ),
             ] else ...[
               // Settlements Tab View
               Expanded(
                 child: settlements.isEmpty
-                    ? const Center(child: Text('All balances are settled up!'))
+                    ? const AppEmptyState(
+                        icon: Icons.check_circle_outline,
+                        title: 'All balances settled!',
+                        message:
+                            'No pending debts or settlement transfers needed for this trip.',
+                      )
                     : ListView.builder(
                         padding: const EdgeInsets.all(AppConstants.spaceLg),
                         itemCount: settlements.length,
@@ -357,7 +418,9 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                                   CircleAvatar(
                                     backgroundColor: Colors.red.shade100,
                                     child: Text(
-                                      st.fromName[0],
+                                      st.fromName.isNotEmpty
+                                          ? st.fromName[0].toUpperCase()
+                                          : '?',
                                       style: TextStyle(
                                         color: Colors.red.shade900,
                                         fontWeight: FontWeight.bold,
@@ -429,7 +492,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: _showAddExpenseDialog,
+                      onPressed: () => _showAddExpenseDialog(activeTrip.id),
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Add Expense'),
                     ),
@@ -451,6 +514,25 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         ),
       ),
     );
+  }
+
+  IconData _getCategoryIcon(String category) {
+    switch (category) {
+      case 'Food':
+        return Icons.restaurant_rounded;
+      case 'Stay':
+        return Icons.hotel_rounded;
+      case 'Fuel':
+        return Icons.local_gas_station_rounded;
+      case 'Travel':
+        return Icons.directions_car_rounded;
+      case 'Tickets':
+        return Icons.confirmation_number_rounded;
+      case 'Shopping':
+        return Icons.shopping_bag_rounded;
+      default:
+        return Icons.receipt_rounded;
+    }
   }
 
   Widget _buildFilterChip(String label, int index) {

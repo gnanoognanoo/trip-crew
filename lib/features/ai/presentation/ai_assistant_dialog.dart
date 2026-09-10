@@ -120,6 +120,26 @@ class _AiAssistantDialogState extends State<AiAssistantDialog> {
                 ],
               ),
               const SizedBox(height: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: const Text(
+                  'Prototype Mode • Cloud Function Gemini Endpoint Pending API Key',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
               Text(
                 'Powered by backend AI functions. Never alters your trip without your explicit confirmation.',
                 style: TextStyle(

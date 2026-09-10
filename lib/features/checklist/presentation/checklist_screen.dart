@@ -1,10 +1,16 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/features/checklist/models/checklist_item.dart';
+import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 9: Packing Checklist screen matching UI design mockup.
+/// Screen 9: Packing Checklist screen connected to real Firestore trips/{tripId}/checklist.
 class ChecklistScreen extends ConsumerStatefulWidget {
   const ChecklistScreen({super.key});
 
@@ -14,80 +20,59 @@ class ChecklistScreen extends ConsumerStatefulWidget {
 
 class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
   int _selectedFilter = 0; // 0: My List, 1: Shared, 2: Assigned
+  StreamSubscription? _sub;
+  List<ChecklistItem> _items = [];
+  bool _isLoading = true;
 
-  final List<ChecklistItem> _items = [
-    // Clothes
-    const ChecklistItem(
-      id: 'c1',
-      title: 'T-shirts',
-      category: 'Clothes',
-      isCompleted: true,
-    ),
-    const ChecklistItem(
-      id: 'c2',
-      title: 'Shorts',
-      category: 'Clothes',
-      isCompleted: true,
-    ),
-    const ChecklistItem(
-      id: 'c3',
-      title: 'Jacket',
-      category: 'Clothes',
-      isCompleted: false,
-    ),
-    const ChecklistItem(
-      id: 'c4',
-      title: 'Socks',
-      category: 'Clothes',
-      isCompleted: false,
-    ),
+  @override
+  void initState() {
+    super.initState();
+    _listenToChecklist();
+  }
 
-    // Travel Essentials
-    const ChecklistItem(
-      id: 't1',
-      title: 'ID Card',
-      category: 'Travel Essentials',
-      isCompleted: true,
-    ),
-    const ChecklistItem(
-      id: 't2',
-      title: 'Power Bank',
-      category: 'Travel Essentials',
-      isCompleted: false,
-      assignedToMemberName: 'Arun',
-      assignedToUid: 'user_arun_102',
-    ),
-    const ChecklistItem(
-      id: 't3',
-      title: 'Charger',
-      category: 'Travel Essentials',
-      isCompleted: false,
-    ),
-    const ChecklistItem(
-      id: 't4',
-      title: 'Travel Adapter',
-      category: 'Travel Essentials',
-      isCompleted: false,
-    ),
+  void _listenToChecklist() {
+    final activeTrip = ref.read(activeTripProvider);
+    if (activeTrip == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
 
-    // Health
-    const ChecklistItem(
-      id: 'h1',
-      title: 'First Aid Kit',
-      category: 'Health',
-      isCompleted: false,
-      assignedToMemberName: 'Rahul',
-      assignedToUid: 'user_rahul_103',
-    ),
-    const ChecklistItem(
-      id: 'h2',
-      title: 'Medicines',
-      category: 'Health',
-      isCompleted: false,
-    ),
-  ];
+    if (FirebaseService.isInitialized) {
+      _sub = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(activeTrip.id)
+          .collection('checklist')
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final loaded = snapshot.docs
+                  .map((doc) => ChecklistItem.fromMap(doc.data(), doc.id))
+                  .toList();
 
-  void _showAddItemDialog() {
+              if (mounted) {
+                setState(() {
+                  _items = loaded;
+                  _isLoading = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted) setState(() => _isLoading = false);
+            },
+          );
+    } else {
+      // Local fallback
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  void _showAddItemDialog(String tripId) {
     final titleCtrl = TextEditingController();
     String category = 'Clothes';
     String? assigned;
@@ -130,16 +115,18 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
               DropdownButtonFormField<String?>(
                 initialValue: assigned,
                 decoration: const InputDecoration(
-                  labelText: 'Assign To (Optional)',
+                  labelText: 'Assign To Member (Optional)',
                 ),
                 items: const [
                   DropdownMenuItem(
                     value: null,
-                    child: Text('Unassigned / Self'),
+                    child: Text('Unassigned / Shared'),
                   ),
-                  DropdownMenuItem(value: 'Arun', child: Text('Arun')),
-                  DropdownMenuItem(value: 'Rahul', child: Text('Rahul')),
-                  DropdownMenuItem(value: 'Praveen', child: Text('Praveen')),
+                  DropdownMenuItem(value: 'Self', child: Text('Myself')),
+                  DropdownMenuItem(
+                    value: 'Crew Member',
+                    child: Text('Crew Member'),
+                  ),
                 ],
                 onChanged: (val) => setDialogState(() => assigned = val),
               ),
@@ -151,19 +138,28 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () {
+              onPressed: () async {
                 if (titleCtrl.text.trim().isNotEmpty) {
-                  setState(() {
-                    _items.add(
-                      ChecklistItem(
-                        id: 'c_${DateTime.now().millisecondsSinceEpoch}',
-                        title: titleCtrl.text.trim(),
-                        category: category,
-                        assignedToMemberName: assigned,
-                      ),
-                    );
-                  });
-                  Navigator.pop(ctx);
+                  final newItem = ChecklistItem(
+                    id: 'c_${DateTime.now().millisecondsSinceEpoch}',
+                    title: titleCtrl.text.trim(),
+                    category: category,
+                    assignedToMemberName: assigned,
+                    isShared: assigned == null,
+                  );
+
+                  if (FirebaseService.isInitialized) {
+                    await FirebaseFirestore.instance
+                        .collection('trips')
+                        .doc(tripId)
+                        .collection('checklist')
+                        .doc(newItem.id)
+                        .set(newItem.toMap());
+                  } else {
+                    setState(() => _items.add(newItem));
+                  }
+
+                  if (ctx.mounted) Navigator.pop(ctx);
                 }
               },
               child: const Text('Add'),
@@ -174,12 +170,49 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
     );
   }
 
+  void _toggleChecklistItem(ChecklistItem item, String tripId) async {
+    final updated = !item.isCompleted;
+
+    if (FirebaseService.isInitialized) {
+      await FirebaseFirestore.instance
+          .collection('trips')
+          .doc(tripId)
+          .collection('checklist')
+          .doc(item.id)
+          .update({'isCompleted': updated});
+    } else {
+      setState(() {
+        final idx = _items.indexWhere((i) => i.id == item.id);
+        if (idx != -1) {
+          _items[idx] = item.copyWith(isCompleted: updated);
+        }
+      });
+    }
+
+    if (updated) {
+      await AnalyticsService.logChecklistItemCompleted(tripId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final activeTrip = ref.watch(activeTripProvider);
 
-    // Group items by category
-    final categories = ['Clothes', 'Travel Essentials', 'Health'];
+    if (activeTrip == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Packing Checklist')),
+        body: const Center(child: Text('No active trip selected.')),
+      );
+    }
+
+    final categories = [
+      'Clothes',
+      'Travel Essentials',
+      'Health',
+      'Electronics',
+      'Trip Specific',
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -211,89 +244,89 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
 
             // Categorized Items
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppConstants.spaceLg,
-                  vertical: 8,
-                ),
-                children: categories.map((cat) {
-                  final catItems = _items.where((item) {
-                    if (item.category != cat) {
-                      return false;
-                    }
-                    if (_selectedFilter == 1) {
-                      return item.isShared;
-                    }
-                    if (_selectedFilter == 2) {
-                      return item.assignedToMemberName != null;
-                    }
-                    return true;
-                  }).toList();
-
-                  if (catItems.isEmpty) return const SizedBox.shrink();
-
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: Text(
-                          cat,
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: theme.colorScheme.primary,
-                          ),
-                        ),
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _items.isEmpty
+                  ? AppEmptyState(
+                      icon: Icons.checklist_rtl_rounded,
+                      title: 'Checklist is empty',
+                      message:
+                          'Add items your crew needs to pack for ${activeTrip.name}.',
+                      actionLabel: 'Add Item',
+                      onActionPressed: () => _showAddItemDialog(activeTrip.id),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppConstants.spaceLg,
+                        vertical: 8,
                       ),
-                      Card(
-                        child: Column(
-                          children: catItems.map((item) {
-                            return CheckboxListTile(
-                              value: item.isCompleted,
-                              activeColor: const Color(0xFF10B981),
-                              title: Text(
-                                item.title,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  decoration: item.isCompleted
-                                      ? TextDecoration.lineThrough
-                                      : TextDecoration.none,
-                                  color: item.isCompleted
-                                      ? theme.colorScheme.onSurfaceVariant
-                                      : theme.colorScheme.onSurface,
+                      children: categories.map((cat) {
+                        final catItems = _items.where((item) {
+                          if (item.category != cat) return false;
+                          if (_selectedFilter == 1) return item.isShared;
+                          if (_selectedFilter == 2) {
+                            return item.assignedToMemberName != null;
+                          }
+                          return true;
+                        }).toList();
+
+                        if (catItems.isEmpty) return const SizedBox.shrink();
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                cat,
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.colorScheme.primary,
                                 ),
                               ),
-                              subtitle: item.assignedToMemberName != null
-                                  ? Text(
-                                      'Assigned to ${item.assignedToMemberName}',
+                            ),
+                            Card(
+                              child: Column(
+                                children: catItems.map((item) {
+                                  return CheckboxListTile(
+                                    value: item.isCompleted,
+                                    activeColor: const Color(0xFF10B981),
+                                    title: Text(
+                                      item.title,
                                       style: TextStyle(
-                                        color: theme.colorScheme.secondary,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
+                                        fontWeight: FontWeight.w600,
+                                        decoration: item.isCompleted
+                                            ? TextDecoration.lineThrough
+                                            : TextDecoration.none,
+                                        color: item.isCompleted
+                                            ? theme.colorScheme.onSurfaceVariant
+                                            : theme.colorScheme.onSurface,
                                       ),
-                                    )
-                                  : null,
-                              onChanged: (val) {
-                                setState(() {
-                                  final idx = _items.indexWhere(
-                                    (i) => i.id == item.id,
+                                    ),
+                                    subtitle: item.assignedToMemberName != null
+                                        ? Text(
+                                            'Assigned to ${item.assignedToMemberName}',
+                                            style: TextStyle(
+                                              color:
+                                                  theme.colorScheme.secondary,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          )
+                                        : null,
+                                    onChanged: (_) => _toggleChecklistItem(
+                                      item,
+                                      activeTrip.id,
+                                    ),
                                   );
-                                  if (idx != -1) {
-                                    _items[idx] = item.copyWith(
-                                      isCompleted: val ?? false,
-                                    );
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                      const SizedBox(height: AppConstants.spaceMd),
-                    ],
-                  );
-                }).toList(),
-              ),
+                                }).toList(),
+                              ),
+                            ),
+                            const SizedBox(height: AppConstants.spaceMd),
+                          ],
+                        );
+                      }).toList(),
+                    ),
             ),
 
             // Bottom Add Item Button
@@ -302,7 +335,7 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: _showAddItemDialog,
+                  onPressed: () => _showAddItemDialog(activeTrip.id),
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text('Add Item'),
                 ),

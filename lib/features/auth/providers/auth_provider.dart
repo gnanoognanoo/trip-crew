@@ -12,11 +12,7 @@ class AuthState {
   final UserProfile? user;
   final Failure? error;
 
-  const AuthState({
-    this.isLoading = false,
-    this.user,
-    this.error,
-  });
+  const AuthState({this.isLoading = false, this.user, this.error});
 
   bool get isAuthenticated => user != null;
 
@@ -43,42 +39,49 @@ class AuthNotifier extends Notifier<AuthState> {
       _authSubscription?.cancel();
     });
 
-    // Start with default/cached state and trigger listeners
     if (FirebaseService.isInitialized) {
       _init();
-      return const AuthState(isLoading: false);
+      return const AuthState(isLoading: true);
     } else {
-      return AuthState(
-        isLoading: false,
-        user: UserProfile(
-          uid: 'demo_kowshik_101',
-          name: 'Kowshik',
-          email: 'kowshik@tripcrew.app',
-          tripCount: 12,
-          distanceKm: 2840,
-          memoryCount: 1240,
-          createdAt: DateTime(2024, 1, 1),
-          updatedAt: DateTime.now(),
-        ),
-      );
+      // Offline/local development fallback
+      return const AuthState(isLoading: false, user: null);
     }
   }
 
   void _init() {
     if (FirebaseService.isInitialized) {
-      _authSubscription = FirebaseAuth.instance.authStateChanges().listen((firebaseUser) async {
-        if (firebaseUser != null) {
-          await _loadUserProfile(firebaseUser.uid, firebaseUser.email ?? '', firebaseUser.displayName);
-        } else {
-          state = const AuthState(isLoading: false);
-        }
-      });
+      _authSubscription = FirebaseAuth.instance.authStateChanges().listen(
+        (firebaseUser) async {
+          if (firebaseUser != null) {
+            await _loadUserProfile(
+              firebaseUser.uid,
+              firebaseUser.email ?? '',
+              firebaseUser.displayName,
+            );
+          } else {
+            state = const AuthState(isLoading: false, user: null);
+          }
+        },
+        onError: (e) {
+          state = AuthState(
+            isLoading: false,
+            error: UnknownFailure(message: e.toString()),
+          );
+        },
+      );
     }
   }
 
-  Future<void> _loadUserProfile(String uid, String email, String? displayName) async {
+  Future<void> _loadUserProfile(
+    String uid,
+    String email,
+    String? displayName,
+  ) async {
     try {
-      final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
       if (doc.exists && doc.data() != null) {
         final profile = UserProfile.fromMap(doc.data()!, uid);
         state = AuthState(user: profile, isLoading: false);
@@ -90,7 +93,17 @@ class AuthNotifier extends Notifier<AuthState> {
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
-        await FirebaseFirestore.instance.collection('users').doc(uid).set(newProfile.toMap());
+        await FirebaseFirestore.instance.collection('users').doc(uid).set({
+          'uid': uid,
+          'name': newProfile.name,
+          'email': email,
+          'photoUrl': null,
+          'tripCount': 0,
+          'distanceKm': 0,
+          'memoryCount': 0,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
         state = AuthState(user: newProfile, isLoading: false);
       }
     } catch (_) {
@@ -111,10 +124,11 @@ class AuthNotifier extends Notifier<AuthState> {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       if (FirebaseService.isInitialized) {
-        final credential = await FirebaseAuth.instance.signInWithEmailAndPassword(
-          email: email.trim(),
-          password: password,
-        );
+        final credential = await FirebaseAuth.instance
+            .signInWithEmailAndPassword(
+              email: email.trim(),
+              password: password,
+            );
         if (credential.user != null) {
           await _loadUserProfile(
             credential.user!.uid,
@@ -124,27 +138,24 @@ class AuthNotifier extends Notifier<AuthState> {
           return true;
         }
       } else {
-        // Local simulation
+        // Fallback for local emulator / offline tests
         await Future.delayed(const Duration(milliseconds: 300));
-        state = AuthState(
-          user: UserProfile(
-            uid: 'demo_kowshik_101',
-            name: email.split('@').first.toUpperCase(),
-            email: email.trim(),
-            tripCount: 12,
-            distanceKm: 2840,
-            memoryCount: 1240,
-            createdAt: DateTime.now(),
-            updatedAt: DateTime.now(),
-          ),
-          isLoading: false,
+        final profile = UserProfile(
+          uid: 'user_${email.hashCode}',
+          name: email.split('@').first,
+          email: email.trim(),
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
         );
+        state = AuthState(user: profile, isLoading: false);
         return true;
       }
       return false;
     } on FirebaseAuthException catch (e) {
       String userMessage = 'Authentication failed. Please try again.';
-      if (e.code == 'user-not-found' || e.code == 'wrong-password' || e.code == 'invalid-credential') {
+      if (e.code == 'user-not-found' ||
+          e.code == 'wrong-password' ||
+          e.code == 'invalid-credential') {
         userMessage = 'Invalid email or password. Please check and try again.';
       } else if (e.code == 'invalid-email') {
         userMessage = 'The email address is badly formatted.';
@@ -161,7 +172,9 @@ class AuthNotifier extends Notifier<AuthState> {
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: const UnknownFailure(message: 'An unexpected error occurred during sign in.'),
+        error: const UnknownFailure(
+          message: 'An unexpected error occurred during sign in.',
+        ),
       );
       return false;
     }
@@ -175,23 +188,32 @@ class AuthNotifier extends Notifier<AuthState> {
     state = state.copyWith(isLoading: true, clearError: true);
     try {
       if (FirebaseService.isInitialized) {
-        final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
-          email: email.trim(),
-          password: password,
-        );
+        final credential = await FirebaseAuth.instance
+            .createUserWithEmailAndPassword(
+              email: email.trim(),
+              password: password,
+            );
         if (credential.user != null) {
           await credential.user!.updateDisplayName(name.trim());
+          final uid = credential.user!.uid;
           final profile = UserProfile(
-            uid: credential.user!.uid,
+            uid: uid,
             name: name.trim(),
             email: email.trim(),
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           );
-          await FirebaseFirestore.instance
-              .collection('users')
-              .doc(credential.user!.uid)
-              .set(profile.toMap());
+          await FirebaseFirestore.instance.collection('users').doc(uid).set({
+            'uid': uid,
+            'name': name.trim(),
+            'email': email.trim(),
+            'photoUrl': null,
+            'tripCount': 0,
+            'distanceKm': 0,
+            'memoryCount': 0,
+            'createdAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
           await AnalyticsService.logAccountCreated();
           state = AuthState(user: profile, isLoading: false);
           return true;
@@ -202,9 +224,6 @@ class AuthNotifier extends Notifier<AuthState> {
           uid: 'user_${DateTime.now().millisecondsSinceEpoch}',
           name: name.trim(),
           email: email.trim(),
-          tripCount: 0,
-          distanceKm: 0,
-          memoryCount: 0,
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
@@ -230,7 +249,9 @@ class AuthNotifier extends Notifier<AuthState> {
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: const UnknownFailure(message: 'Could not complete registration. Please retry.'),
+        error: const UnknownFailure(
+          message: 'Could not complete registration. Please retry.',
+        ),
       );
       return false;
     }
@@ -250,4 +271,6 @@ class AuthNotifier extends Notifier<AuthState> {
   }
 }
 
-final authProvider = NotifierProvider<AuthNotifier, AuthState>(AuthNotifier.new);
+final authProvider = NotifierProvider<AuthNotifier, AuthState>(
+  AuthNotifier.new,
+);

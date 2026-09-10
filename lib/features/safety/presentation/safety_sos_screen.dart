@@ -20,7 +20,7 @@ class _SafetySosScreenState extends ConsumerState<SafetySosScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm Emergency SOS Alert? 🚨'),
         content: const Text(
-          'This will immediately alert all 4 crew members with your live GPS location and continuous audio beacon.',
+          'This will immediately alert all trip crew members with your live GPS location and continuous audio beacon.',
         ),
         actions: [
           TextButton(
@@ -168,14 +168,14 @@ class _SafetySosScreenState extends ConsumerState<SafetySosScreen> {
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       subtitle: const Text(
-                        'Manipal Hospital Goa (3.4 km)',
+                        'National Emergency Medical Helpline (108)',
                         style: TextStyle(fontSize: 12),
                       ),
                       trailing: const Icon(Icons.chevron_right),
                       onTap: () {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
-                            content: Text('Hospital list & emergency dialer'),
+                            content: Text('Dialing Emergency Medical: 108'),
                           ),
                         );
                       },
@@ -191,11 +191,11 @@ class _SafetySosScreenState extends ConsumerState<SafetySosScreen> {
                         ),
                       ),
                       title: const Text(
-                        'Police Station',
+                        'Police Assistance',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       subtitle: const Text(
-                        'Calangute Police (1.8 km)',
+                        'National Police Helpline (112)',
                         style: TextStyle(fontSize: 12),
                       ),
                       trailing: const Icon(Icons.chevron_right),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 
 /// Screen 14: Live Crew Location map screen matching UI design mockup.
 class LiveCrewLocationScreen extends ConsumerStatefulWidget {
@@ -43,7 +44,7 @@ class _LiveCrewLocationScreenState
                 'Until End of Day',
                 'Active until 11:59 PM today',
               ),
-              _buildOptionTile('Trip End', 'Share throughout Goa Trip'),
+              _buildOptionTile('Trip End', 'Share throughout active trip'),
             ],
           ),
         ),
@@ -72,6 +73,7 @@ class _LiveCrewLocationScreenState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final currentUser = ref.watch(authProvider).user;
 
     return Scaffold(
       appBar: AppBar(
@@ -113,41 +115,23 @@ class _LiveCrewLocationScreenState
                 // Road traces
                 CustomPaint(size: Size.infinite, painter: _MapCanvasPainter()),
 
-                // Marker 1: Kowshik
+                // Realtime / User GPS Marker
                 _buildMarker(
-                  top: 140,
+                  top: 200,
                   left: 170,
-                  name: 'Kowshik',
-                  status: '250 m away',
-                  color: Colors.orange,
+                  name: currentUser?.name ?? 'You',
+                  status: 'Current Location',
+                  color: const Color(0xFF10B981),
                   isOwner: true,
                 ),
 
-                // Marker 2: Rahul
+                // Development Simulation Partner Marker
                 _buildMarker(
-                  top: 260,
-                  left: 90,
-                  name: 'Rahul',
-                  status: '1.2 km away',
-                  color: Colors.blue,
-                ),
-
-                // Marker 3: Praveen
-                _buildMarker(
-                  top: 320,
-                  left: 210,
-                  name: 'Praveen',
-                  status: 'With Group',
-                  color: Colors.purple,
-                ),
-
-                // Marker 4: Arun
-                _buildMarker(
-                  top: 350,
-                  left: 180,
-                  name: 'Arun',
-                  status: 'With Group',
-                  color: Colors.teal,
+                  top: 290,
+                  left: 120,
+                  name: 'Crew Beacon',
+                  status: 'Synced (GPS simulation)',
+                  color: const Color(0xFF3B82F6),
                 ),
               ],
             ),
@@ -158,53 +142,89 @@ class _LiveCrewLocationScreenState
             top: 16,
             left: 16,
             right: 16,
-            child: InkWell(
-              onTap: _showPrivacyOptions,
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 8,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
+            child: Column(
+              children: [
+                InkWell(
+                  onTap: _showPrivacyOptions,
                   borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
                     ),
-                  ],
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.1),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 10,
+                          height: 10,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF10B981),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Sharing: $_sharingOption',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        const Icon(
+                          Icons.tune_rounded,
+                          size: 16,
+                          color: Colors.grey,
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF10B981),
-                        shape: BoxShape.circle,
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: const Color(0xFFF59E0B)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(
+                        Icons.info_outline,
+                        size: 14,
+                        color: Color(0xFFB45309),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        'Sharing: $_sharingOption',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
+                      SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Development Map Preview • Live Google Maps SDK integration pending key.',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Color(0xFF92400E),
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
-                    ),
-                    const Icon(
-                      Icons.tune_rounded,
-                      size: 16,
-                      color: Colors.grey,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
 
@@ -240,7 +260,7 @@ class _LiveCrewLocationScreenState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Everyone is together!',
+                            'Crew Radar Active',
                             style: TextStyle(
                               fontWeight: FontWeight.w800,
                               fontSize: 16,
@@ -248,7 +268,7 @@ class _LiveCrewLocationScreenState
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'All 4 crew members are within 1.5 km of meeting point.',
+                            'Live GPS coordinates synchronized with trip crew.',
                             style: TextStyle(
                               color: theme.colorScheme.onSurfaceVariant,
                               fontSize: 12,

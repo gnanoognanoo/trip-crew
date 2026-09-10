@@ -1,13 +1,18 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/crew/models/crew_member.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 7: Crew Members screen matching UI design mockup.
+/// Screen 7: Crew Members screen connected to real Firestore subcollection.
 class CrewScreen extends ConsumerStatefulWidget {
   const CrewScreen({super.key});
 
@@ -16,36 +21,76 @@ class CrewScreen extends ConsumerStatefulWidget {
 }
 
 class _CrewScreenState extends ConsumerState<CrewScreen> {
-  final List<CrewMember> _members = [
-    CrewMember(
-      uid: 'demo_kowshik_101',
-      displayName: 'Kowshik',
-      role: 'owner',
-      isOnline: true,
-      joinedAt: DateTime(2024, 10, 1),
-    ),
-    CrewMember(
-      uid: 'user_arun_102',
-      displayName: 'Arun',
-      role: 'member',
-      isOnline: true,
-      joinedAt: DateTime(2024, 10, 2),
-    ),
-    CrewMember(
-      uid: 'user_rahul_103',
-      displayName: 'Rahul',
-      role: 'member',
-      isOnline: true,
-      joinedAt: DateTime(2024, 10, 3),
-    ),
-    CrewMember(
-      uid: 'user_praveen_104',
-      displayName: 'Praveen',
-      role: 'member',
-      isOnline: true,
-      joinedAt: DateTime(2024, 10, 4),
-    ),
-  ];
+  StreamSubscription? _sub;
+  List<CrewMember> _members = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenToCrew();
+  }
+
+  void _listenToCrew() {
+    final activeTrip = ref.read(activeTripProvider);
+    if (activeTrip == null) {
+      setState(() => _isLoading = false);
+      return;
+    }
+
+    if (FirebaseService.isInitialized) {
+      _sub = FirebaseFirestore.instance
+          .collection('trips')
+          .doc(activeTrip.id)
+          .collection('members')
+          .snapshots()
+          .listen(
+            (snapshot) {
+              final loaded = snapshot.docs
+                  .map((doc) => CrewMember.fromMap(doc.data(), doc.id))
+                  .toList();
+
+              // Sort owner first, then by joinedAt
+              loaded.sort((a, b) {
+                if (a.isOwner) return -1;
+                if (b.isOwner) return 1;
+                return a.joinedAt.compareTo(b.joinedAt);
+              });
+
+              if (mounted) {
+                setState(() {
+                  _members = loaded;
+                  _isLoading = false;
+                });
+              }
+            },
+            onError: (_) {
+              if (mounted) setState(() => _isLoading = false);
+            },
+          );
+    } else {
+      // Local fallback for offline mode
+      final currentUser = ref.read(authProvider).user;
+      setState(() {
+        _members = [
+          CrewMember(
+            uid: currentUser?.uid ?? 'creator',
+            displayName: currentUser?.name ?? 'Trip Owner',
+            role: 'owner',
+            isOnline: true,
+            joinedAt: DateTime.now(),
+          ),
+        ];
+        _isLoading = false;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
 
   void _showQrDialog(String inviteCode) {
     showDialog(
@@ -81,11 +126,53 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
     );
   }
 
+  void _removeMember(CrewMember member, String tripId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove ${member.displayName}?'),
+        content: const Text('They will no longer have access to this trip.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && FirebaseService.isInitialized) {
+      await FirebaseFirestore.instance
+          .collection('trips')
+          .doc(tripId)
+          .collection('members')
+          .doc(member.uid)
+          .delete();
+      await FirebaseFirestore.instance.collection('trips').doc(tripId).update({
+        'memberCount': FieldValue.increment(-1),
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final activeTrip = ref.watch(activeTripProvider);
-    final inviteCode = activeTrip?.inviteCode ?? 'TRIP-7X92K';
+    final currentUser = ref.watch(authProvider).user;
+    final inviteCode = activeTrip?.inviteCode ?? 'TRIP-DEMO';
+    final isCurrentOwner = activeTrip?.ownerId == currentUser?.uid;
+
+    if (activeTrip == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Crew Members')),
+        body: const Center(child: Text('No active trip selected.')),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -120,13 +207,13 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              activeTrip?.name ?? 'Goa Trip',
+                              activeTrip.name,
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             Text(
-                              '${_members.length} members',
+                              '${_members.length} ${_members.length == 1 ? "member" : "members"}',
                               style: TextStyle(
                                 color: theme.colorScheme.onSurfaceVariant,
                                 fontSize: 13,
@@ -151,106 +238,136 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
 
             // Members List
             Expanded(
-              child: ListView.separated(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppConstants.spaceLg,
-                ),
-                itemCount: _members.length,
-                separatorBuilder: (_, index) => const Divider(height: 1),
-                itemBuilder: (context, index) {
-                  final member = _members[index];
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(vertical: 4),
-                    leading: Stack(
-                      children: [
-                        CircleAvatar(
-                          radius: 22,
-                          backgroundColor:
-                              theme.colorScheme.surfaceContainerHigh,
-                          child: Text(
-                            member.displayName[0].toUpperCase(),
-                            style: TextStyle(
-                              fontWeight: FontWeight.w700,
-                              color: theme.colorScheme.onSurface,
-                            ),
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _members.isEmpty
+                  ? const AppEmptyState(
+                      icon: Icons.group_off_outlined,
+                      title: 'No crew members yet',
+                      message:
+                          'Share your invite code to bring friends into this workspace.',
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppConstants.spaceLg,
+                      ),
+                      itemCount: _members.length,
+                      separatorBuilder: (_, index) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final member = _members[index];
+                        final isMe = member.uid == currentUser?.uid;
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 4,
                           ),
-                        ),
-                        if (member.isOnline)
-                          Positioned(
-                            bottom: 0,
-                            right: 0,
-                            child: Container(
-                              width: 12,
-                              height: 12,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF10B981),
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
+                          leading: Stack(
+                            children: [
+                              CircleAvatar(
+                                radius: 22,
+                                backgroundColor:
+                                    theme.colorScheme.surfaceContainerHigh,
+                                child: Text(
+                                  member.displayName.isNotEmpty
+                                      ? member.displayName[0].toUpperCase()
+                                      : 'M',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
                                 ),
                               ),
-                            ),
+                              if (member.isOnline)
+                                Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Container(
+                                    width: 12,
+                                    height: 12,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF10B981),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
-                      ],
-                    ),
-                    title: Row(
-                      children: [
-                        Text(
-                          member.displayName,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        if (member.isOwner) ...[
-                          const SizedBox(width: 6),
-                          const Icon(
-                            Icons.workspace_premium_rounded,
-                            size: 18,
-                            color: Colors.amber,
-                          ),
-                        ],
-                      ],
-                    ),
-                    subtitle: Text(
-                      member.isOwner ? 'Trip Owner' : 'Member',
-                      style: TextStyle(
-                        color: member.isOwner
-                            ? theme.colorScheme.primary
-                            : theme.colorScheme.onSurfaceVariant,
-                        fontWeight: member.isOwner
-                            ? FontWeight.w600
-                            : FontWeight.w400,
-                        fontSize: 12,
-                      ),
-                    ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (member.isOnline)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF10B981,
-                              ).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: const Text(
-                              'Online',
-                              style: TextStyle(
-                                color: Color(0xFF10B981),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
+                          title: Row(
+                            children: [
+                              Text(
+                                isMe
+                                    ? '${member.displayName} (You)'
+                                    : member.displayName,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
+                              if (member.isOwner) ...[
+                                const SizedBox(width: 6),
+                                const Icon(
+                                  Icons.workspace_premium_rounded,
+                                  size: 18,
+                                  color: Colors.amber,
+                                ),
+                              ],
+                            ],
+                          ),
+                          subtitle: Text(
+                            member.isOwner ? 'Trip Owner' : 'Member',
+                            style: TextStyle(
+                              color: member.isOwner
+                                  ? theme.colorScheme.primary
+                                  : theme.colorScheme.onSurfaceVariant,
+                              fontWeight: member.isOwner
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                              fontSize: 12,
                             ),
                           ),
-                      ],
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (member.isOnline)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(
+                                      0xFF10B981,
+                                    ).withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Text(
+                                    'Online',
+                                    style: TextStyle(
+                                      color: Color(0xFF10B981),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              // Owner can remove member (cannot remove self)
+                              if (isCurrentOwner && !member.isOwner)
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.remove_circle_outline,
+                                    color: Colors.redAccent,
+                                    size: 20,
+                                  ),
+                                  onPressed: () =>
+                                      _removeMember(member, activeTrip.id),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
                     ),
-                  );
-                },
-              ),
             ),
 
             // Bottom "Invite via" section

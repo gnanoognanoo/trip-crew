@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
 /// Screen 18: After-Trip Recap & Analytics screen matching UI design mockup.
@@ -32,7 +33,9 @@ class TripRecapScreen extends ConsumerWidget {
             children: [
               const SizedBox(height: AppConstants.spaceSm),
               Text(
-                'Your ${activeTrip?.name ?? 'Goa Trip'}',
+                activeTrip != null
+                    ? 'Recap: ${activeTrip.name}'
+                    : 'Trip Analytics',
                 style: theme.textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.5,
@@ -40,7 +43,9 @@ class TripRecapScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Trip complete • 4 days of shared memories with your crew',
+                activeTrip != null
+                    ? '${activeTrip.startingPlace} → ${activeTrip.destination} • Crew Shared Memories'
+                    : 'Select an active trip to explore crew highlights',
                 style: TextStyle(
                   color: theme.colorScheme.onSurfaceVariant,
                   fontSize: 13,
@@ -54,7 +59,9 @@ class TripRecapScreen extends ConsumerWidget {
                   _buildMetricCard(
                     context,
                     label: 'Total Spending',
-                    value: '₹18,420',
+                    value: CurrencyFormatter.formatUnits(
+                      activeTrip?.totalSpendingPaise ?? 0,
+                    ),
                     icon: Icons.account_balance_wallet_outlined,
                     color: const Color(0xFFF59E0B),
                   ),
@@ -62,7 +69,7 @@ class TripRecapScreen extends ConsumerWidget {
                   _buildMetricCard(
                     context,
                     label: 'Distance',
-                    value: '486 km',
+                    value: '-- km',
                     icon: Icons.directions_car_rounded,
                     color: const Color(0xFF10B981),
                   ),
@@ -74,7 +81,7 @@ class TripRecapScreen extends ConsumerWidget {
                   _buildMetricCard(
                     context,
                     label: 'Places Visited',
-                    value: '14',
+                    value: '--',
                     icon: Icons.place_outlined,
                     color: const Color(0xFF3B82F6),
                   ),
@@ -82,7 +89,7 @@ class TripRecapScreen extends ConsumerWidget {
                   _buildMetricCard(
                     context,
                     label: 'Photos',
-                    value: '183',
+                    value: '--',
                     icon: Icons.photo_library_outlined,
                     color: const Color(0xFF8B5CF6),
                   ),
@@ -115,7 +122,7 @@ class TripRecapScreen extends ConsumerWidget {
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       trailing: const Text(
-                        '7 Stops',
+                        '-- Stops',
                         style: TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
@@ -136,9 +143,11 @@ class TripRecapScreen extends ConsumerWidget {
                         'Most Active Explorer',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      trailing: const Text(
-                        'Rahul',
-                        style: TextStyle(
+                      trailing: Text(
+                        activeTrip != null
+                            ? '${activeTrip.memberCount} crew'
+                            : '--',
+                        style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
                         ),
@@ -155,12 +164,12 @@ class TripRecapScreen extends ConsumerWidget {
                         ),
                       ),
                       title: const Text(
-                        'Top Category',
+                        'Trip Type',
                         style: TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      trailing: const Text(
-                        'Beaches',
-                        style: TextStyle(
+                      trailing: Text(
+                        activeTrip?.tripType ?? 'Road Trip',
+                        style: const TextStyle(
                           fontWeight: FontWeight.w800,
                           fontSize: 15,
                         ),

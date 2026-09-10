@@ -13,7 +13,7 @@ class JoinTripScreen extends ConsumerStatefulWidget {
 }
 
 class _JoinTripScreenState extends ConsumerState<JoinTripScreen> {
-  final _codeController = TextEditingController(text: 'TRIP-7X92K');
+  final _codeController = TextEditingController();
   bool _isJoining = false;
   String? _error;
 

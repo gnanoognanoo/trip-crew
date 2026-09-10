@@ -14,7 +14,7 @@ class CurrencyFormatter {
     return units / 100.0;
   }
 
-  /// Formats an amount with currency symbol (e.g. ₹18,450 or ₹1,200.50).
+  /// Formats an amount with currency symbol (e.g. ₹1,200 or ₹1,200.50).
   static String format(
     double amount, {
     String currency = '₹',

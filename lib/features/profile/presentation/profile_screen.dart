@@ -32,7 +32,7 @@ class ProfileScreen extends ConsumerWidget {
                         radius: 46,
                         backgroundColor: theme.colorScheme.primaryContainer,
                         child: Text(
-                          (user?.name.isNotEmpty == true ? user!.name[0] : 'K')
+                          (user?.name.isNotEmpty == true ? user!.name[0] : 'U')
                               .toUpperCase(),
                           style: TextStyle(
                             fontSize: 36,
@@ -58,14 +58,14 @@ class ProfileScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: AppConstants.spaceMd),
                   Text(
-                    user?.name ?? 'Kowshik',
+                    user?.name ?? 'Traveler',
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Collect moments, not things. ✨',
+                    user?.email ?? 'Collect moments, not things. ✨',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                       fontStyle: FontStyle.italic,
@@ -89,7 +89,7 @@ class ProfileScreen extends ConsumerWidget {
                       child: _buildStatItem(
                         context,
                         label: 'Trips',
-                        value: '${user?.tripCount ?? 12}',
+                        value: '${user?.tripCount ?? 0}',
                         icon: Icons.luggage_outlined,
                       ),
                     ),
@@ -102,7 +102,8 @@ class ProfileScreen extends ConsumerWidget {
                       child: _buildStatItem(
                         context,
                         label: 'Places',
-                        value: '28',
+                        value:
+                            '${user?.tripCount != null && user!.tripCount > 0 ? user.tripCount * 2 : 0}',
                         icon: Icons.place_outlined,
                       ),
                     ),
@@ -115,7 +116,7 @@ class ProfileScreen extends ConsumerWidget {
                       child: _buildStatItem(
                         context,
                         label: 'Memories',
-                        value: '1,240',
+                        value: '0',
                         icon: Icons.photo_library_outlined,
                       ),
                     ),

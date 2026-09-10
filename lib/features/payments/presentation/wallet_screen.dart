@@ -14,42 +14,8 @@ class WalletScreen extends ConsumerStatefulWidget {
 }
 
 class _WalletScreenState extends ConsumerState<WalletScreen> {
-  double _balance = 5250.0;
-
-  final List<WalletTransaction> _transactions = [
-    WalletTransaction(
-      id: 'tx_1',
-      title: 'Paid to Arun',
-      subtitle: 'Goa Dinner • 12 Oct 2024',
-      amount: 1200.0,
-      isCredit: false,
-      date: DateTime(2024, 10, 12),
-    ),
-    WalletTransaction(
-      id: 'tx_2',
-      title: 'Received from Rahul',
-      subtitle: 'Hotel Share • 11 Oct 2024',
-      amount: 800.0,
-      isCredit: true,
-      date: DateTime(2024, 10, 11),
-    ),
-    WalletTransaction(
-      id: 'tx_3',
-      title: 'Paid to Praveen',
-      subtitle: 'Fuel • 10 Oct 2024',
-      amount: 1500.0,
-      isCredit: false,
-      date: DateTime(2024, 10, 10),
-    ),
-    WalletTransaction(
-      id: 'tx_4',
-      title: 'Added Money',
-      subtitle: 'UPI • 08 Oct 2024',
-      amount: 5000.0,
-      isCredit: true,
-      date: DateTime(2024, 10, 8),
-    ),
-  ];
+  double _balance = 0.0;
+  final List<WalletTransaction> _transactions = [];
 
   void _showAddMoneyDialog() {
     final amountCtrl = TextEditingController(text: '1000');
@@ -131,6 +97,51 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: AppConstants.spaceSm),
+
+              // Sandbox / Regulatory Compliance Banner
+              Container(
+                margin: const EdgeInsets.only(bottom: AppConstants.spaceMd),
+                padding: const EdgeInsets.all(AppConstants.spaceMd),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.shield_outlined,
+                      color: Color(0xFFB45309),
+                      size: 20,
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Development / Sandbox Simulation',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF92400E),
+                              fontSize: 13,
+                            ),
+                          ),
+                          SizedBox(height: 3),
+                          Text(
+                            'TripCrew is not an unlicensed stored-value wallet. Firebase never holds customer funds. Real transactions are routed through authorized payment gateways.',
+                            style: TextStyle(
+                              color: Color(0xFF78350F),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
 
               // Gradient Wallet Card
               Container(
@@ -261,54 +272,73 @@ class _WalletScreenState extends ConsumerState<WalletScreen> {
                 ),
               ),
               const SizedBox(height: AppConstants.spaceSm),
-              Card(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: _transactions.length,
-                  separatorBuilder: (_, index) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final tx = _transactions[index];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: tx.isCredit
-                            ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                            : const Color(0xFFEF4444).withValues(alpha: 0.15),
-                        child: Icon(
-                          tx.isCredit
-                              ? Icons.arrow_downward_rounded
-                              : Icons.arrow_upward_rounded,
-                          color: tx.isCredit
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFFEF4444),
-                          size: 20,
+              _transactions.isEmpty
+                  ? const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(AppConstants.spaceLg),
+                        child: Center(
+                          child: Text(
+                            'No sandbox transactions yet.',
+                            style: TextStyle(color: Colors.grey),
+                          ),
                         ),
                       ),
-                      title: Text(
-                        tx.title,
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                    )
+                  : Card(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _transactions.length,
+                        separatorBuilder: (_, index) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final tx = _transactions[index];
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: tx.isCredit
+                                  ? const Color(
+                                      0xFF10B981,
+                                    ).withValues(alpha: 0.15)
+                                  : const Color(
+                                      0xFFEF4444,
+                                    ).withValues(alpha: 0.15),
+                              child: Icon(
+                                tx.isCredit
+                                    ? Icons.arrow_downward_rounded
+                                    : Icons.arrow_upward_rounded,
+                                color: tx.isCredit
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFFEF4444),
+                                size: 20,
+                              ),
+                            ),
+                            title: Text(
+                              tx.title,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            subtitle: Text(
+                              tx.subtitle,
+                              style: TextStyle(
+                                color: theme.colorScheme.onSurfaceVariant,
+                                fontSize: 12,
+                              ),
+                            ),
+                            trailing: Text(
+                              '${tx.isCredit ? '+' : '-'} ${CurrencyFormatter.format(tx.amount)}',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                                color: tx.isCredit
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFF0F172A),
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                      subtitle: Text(
-                        tx.subtitle,
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                      trailing: Text(
-                        '${tx.isCredit ? '+' : '-'} ${CurrencyFormatter.format(tx.amount)}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                          color: tx.isCredit
-                              ? const Color(0xFF10B981)
-                              : const Color(0xFF0F172A),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
+                    ),
               const SizedBox(height: AppConstants.spaceLg),
 
               Center(
