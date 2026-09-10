@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tripcrew/app/app.dart';
+import 'package:tripcrew/core/services/firebase_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  runApp(
-    const ProviderScope(
-      child: TripCrewApp(),
-    ),
-  );
+  // Initialize Firebase with multi-platform Crashlytics & Analytics
+  await FirebaseService.initialize();
+
+  runApp(const ProviderScope(child: TripCrewApp()));
 }

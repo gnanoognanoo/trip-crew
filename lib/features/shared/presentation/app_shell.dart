@@ -1,17 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
-/// App-level root shell providing bottom navigation across top-level destinations:
-/// Home, Trips, and Profile.
-///
-/// NOTE: Individual Trip Workspaces will later have their own dedicated navigation.
+/// App-level root shell providing primary bottom navigation:
+/// Home, Trips, Wallet, Explore, Profile.
 class AppShell extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
-  const AppShell({
-    super.key,
-    required this.navigationShell,
-  });
+  const AppShell({super.key, required this.navigationShell});
 
   void _onDestinationSelected(int index) {
     navigationShell.goBranch(
@@ -37,6 +32,16 @@ class AppShell extends StatelessWidget {
             icon: Icon(Icons.luggage_outlined),
             selectedIcon: Icon(Icons.luggage_rounded),
             label: 'Trips',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.account_balance_wallet_outlined),
+            selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+            label: 'Wallet',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.explore_outlined),
+            selectedIcon: Icon(Icons.explore_rounded),
+            label: 'Explore',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

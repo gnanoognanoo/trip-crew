@@ -5,10 +5,7 @@ abstract class Failure {
   final String message;
   final String? code;
 
-  const Failure({
-    required this.message,
-    this.code,
-  });
+  const Failure({required this.message, this.code});
 
   @override
   String toString() => 'Failure(message: $message, code: $code)';
@@ -34,7 +31,8 @@ class ServerFailure extends Failure {
 
 class NetworkFailure extends Failure {
   const NetworkFailure({
-    super.message = 'No internet connection. Please check your network and retry.',
+    super.message =
+        'No internet connection. Please check your network and retry.',
     super.code,
   });
 }
@@ -47,10 +45,7 @@ class AuthFailure extends Failure {
 }
 
 class ValidationFailure extends Failure {
-  const ValidationFailure({
-    required super.message,
-    super.code,
-  });
+  const ValidationFailure({required super.message, super.code});
 }
 
 class UnknownFailure extends Failure {

@@ -1,0 +1,119 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+    
+    function isTripMember(tripId) {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)) ||
+        get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid
+      );
+    }
+    
+    function isTripOwner(tripId) {
+      return isAuthenticated() && get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid;
+    }
+
+    // Users collection
+    match /users/{uid} {
+      allow read: if isAuthenticated();
+      allow create: if isUser(uid);
+      allow update: if isUser(uid);
+      allow delete: if false; // User accounts are preserved or deleted via Cloud Functions/Admin
+    }
+
+    // Trips collection
+    match /trips/{tripId} {
+      // Allow reading if user is a member or owner
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        resource.data.ownerId == request.auth.uid ||
+        exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
+      );
+      
+      // Allow creation if the ownerId is set to the authenticated user
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      
+      // Only owner can update or delete trip metadata
+      allow update: if isTripOwner(tripId);
+      allow delete: if isTripOwner(tripId);
+
+      // Members subcollection
+      match /members/{memberUid} {
+        allow read: if isTripMember(tripId);
+        
+        // Joining: User can add themselves as a member, but cannot self-assign owner role
+        allow create: if isAuthenticated() && 
+                      request.auth.uid == memberUid && 
+                      request.resource.data.role == 'member';
+                      
+        // Owner can manage member roles or add members
+        allow create, update: if isTripOwner(tripId);
+        
+        // Members can leave (delete themselves), owner can remove members (but owner cannot delete self here)
+        allow delete: if (isAuthenticated() && request.auth.uid == memberUid && !isTripOwner(tripId)) || 
+                         (isTripOwner(tripId) && memberUid != request.auth.uid);
+      }
+
+      // Itinerary subcollection
+      match /itinerary/{itemId} {
+        allow read, write: if isTripMember(tripId);
+      }
+
+      // Expenses subcollection
+      match /expenses/{expenseId} {
+        allow read: if isTripMember(tripId);
+        allow create: if isTripMember(tripId) && request.resource.data.createdBy == request.auth.uid;
+        allow update, delete: if isTripMember(tripId) && 
+                              (resource.data.createdBy == request.auth.uid || isTripOwner(tripId));
+      }
+
+      // Packing checklist subcollection
+      match /checklist/{itemId} {
+        allow read, write: if isTripMember(tripId);
+      }
+
+      // Shared memories subcollection
+      match /memories/{memoryId} {
+        allow read: if isTripMember(tripId);
+        allow create: if isTripMember(tripId) && request.resource.data.uploaderId == request.auth.uid;
+        allow update, delete: if isTripMember(tripId) && 
+                              (resource.data.uploaderId == request.auth.uid || isTripOwner(tripId));
+      }
+
+      // Trip pulses subcollection
+      match /pulses/{pulseUid} {
+        allow read: if isTripMember(tripId);
+        allow write: if isTripMember(tripId) && request.auth.uid == pulseUid;
+      }
+
+      // Live crew locations subcollection
+      match /locations/{locationUid} {
+        allow read: if isTripMember(tripId);
+        allow write: if isTripMember(tripId) && request.auth.uid == locationUid;
+      }
+
+      // Notifications subcollection
+      match /notifications/{notificationId} {
+        allow read: if isTripMember(tripId);
+        allow write: if isTripMember(tripId);
+      }
+    }
+
+    // Top-level invite codes collection (mapping code to tripId)
+    match /tripInvites/{inviteCode} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && isTripOwner(request.resource.data.tripId);
+    }
+  }
+}

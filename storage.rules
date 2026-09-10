@@ -1,0 +1,35 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+    
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    function isWithinSizeLimit(maxSizeMB) {
+      return request.resource.size <= maxSizeMB * 1024 * 1024;
+    }
+
+    // User avatars
+    match /users/{uid}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isUser(uid) && isImage() && isWithinSizeLimit(5);
+    }
+
+    // Trip shared memories
+    match /trips/{tripId}/memories/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isImage() && isWithinSizeLimit(20);
+    }
+  }
+}
