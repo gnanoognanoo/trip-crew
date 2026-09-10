@@ -37,34 +37,21 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: String.fromEnvironment(
-      'FIREBASE_WEB_API_KEY',
-      defaultValue: 'AIzaSyTripCrewWebFakeKeyForDevelopmentOnly',
-    ),
-    appId: String.fromEnvironment(
-      'FIREBASE_WEB_APP_ID',
-      defaultValue: '1:540250477392:web:a1b2c3d4e5f6',
-    ),
-    messagingSenderId: messagingSenderId,
-    projectId: projectId,
-    authDomain: '$projectId.firebaseapp.com',
-    storageBucket: storageBucket,
+    apiKey: 'AIzaSyBblzD72feg3ngOfMfsR3IpnvXBl8shNtA',
+    appId: '1:540250477392:web:258a2eaae3e130f9ce9255',
+    messagingSenderId: '540250477392',
+    projectId: 'tripcrew-travel-2026',
+    authDomain: 'tripcrew-travel-2026.firebaseapp.com',
+    storageBucket: 'tripcrew-travel-2026.firebasestorage.app',
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: String.fromEnvironment(
-      'FIREBASE_ANDROID_API_KEY',
-      defaultValue: 'AIzaSyTripCrewAndroidKeyForDevelopmentOnly',
-    ),
-    appId: String.fromEnvironment(
-      'FIREBASE_ANDROID_APP_ID',
-      defaultValue: '1:540250477392:android:a1b2c3d4e5f6',
-    ),
-    messagingSenderId: messagingSenderId,
-    projectId: projectId,
-    storageBucket: storageBucket,
+    apiKey: 'AIzaSyCRK0HyIN5JqbdTB0aqo3R3W93gSXnFJOE',
+    appId: '1:540250477392:android:084593c5934d57c8ce9255',
+    messagingSenderId: '540250477392',
+    projectId: 'tripcrew-travel-2026',
+    storageBucket: 'tripcrew-travel-2026.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: String.fromEnvironment(
       'FIREBASE_IOS_API_KEY',
@@ -81,17 +68,11 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: String.fromEnvironment(
-      'FIREBASE_WINDOWS_API_KEY',
-      defaultValue: 'AIzaSyTripCrewWinKeyForDevelopmentOnly',
-    ),
-    appId: String.fromEnvironment(
-      'FIREBASE_WINDOWS_APP_ID',
-      defaultValue: '1:540250477392:web:a1b2c3d4e5f6',
-    ),
-    messagingSenderId: messagingSenderId,
-    projectId: projectId,
-    authDomain: '$projectId.firebaseapp.com',
-    storageBucket: storageBucket,
+    apiKey: 'AIzaSyBblzD72feg3ngOfMfsR3IpnvXBl8shNtA',
+    appId: '1:540250477392:web:abcd798827cf9d52ce9255',
+    messagingSenderId: '540250477392',
+    projectId: 'tripcrew-travel-2026',
+    authDomain: 'tripcrew-travel-2026.firebaseapp.com',
+    storageBucket: 'tripcrew-travel-2026.firebasestorage.app',
   );
 }

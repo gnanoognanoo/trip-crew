@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "540250477392",
+    "project_id": "tripcrew-travel-2026",
+    "storage_bucket": "tripcrew-travel-2026.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:540250477392:android:084593c5934d57c8ce9255",
+        "android_client_info": {
+          "package_name": "com.example.tripcrew"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRK0HyIN5JqbdTB0aqo3R3W93gSXnFJOE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
