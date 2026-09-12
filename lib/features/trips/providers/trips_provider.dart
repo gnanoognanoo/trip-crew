@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
@@ -102,14 +104,34 @@ class TripsNotifier extends Notifier<TripsState> {
         );
   }
 
-  String _generateInviteCode() {
+  /// Generates a high-entropy, human-shareable invite code.
+  /// Format: TC-XXXX-XXXX (e.g. TC-K7M4-X9QP).
+  /// Uses Random.secure() across 32 unambiguous alphanumeric characters (excluding 0, O, 1, I).
+  /// Entropy: 32^8 = 1,099,511,627,776 combinations (40 bits of cryptographic entropy).
+  static String generateInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final rand = Random();
-    final code = List.generate(
-      5,
+    final rand = Random.secure();
+    final block1 = List.generate(
+      4,
       (_) => chars[rand.nextInt(chars.length)],
     ).join();
-    return 'TRIP-$code';
+    final block2 = List.generate(
+      4,
+      (_) => chars[rand.nextInt(chars.length)],
+    ).join();
+    return 'TC-$block1-$block2';
+  }
+
+  /// Normalizes user-entered invite codes (handles lowercase, missing hyphens, extra spaces).
+  /// E.g. "k7m4x9qp" or "tc-k7m4-x9qp" -> "TC-K7M4-X9QP".
+  static String normalizeInviteCode(String raw) {
+    final cleaned = raw.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    if (cleaned.startsWith('TC') && cleaned.length == 10) {
+      return 'TC-${cleaned.substring(2, 6)}-${cleaned.substring(6, 10)}';
+    } else if (cleaned.length == 8) {
+      return 'TC-${cleaned.substring(0, 4)}-${cleaned.substring(4, 8)}';
+    }
+    return raw.trim().toUpperCase();
   }
 
   /// Creates a trip atomically:
@@ -127,7 +149,7 @@ class TripsNotifier extends Notifier<TripsState> {
     required String currency,
   }) async {
     final user = ref.read(authProvider).user;
-    final inviteCode = _generateInviteCode();
+    final inviteCode = generateInviteCode();
     final tripId = 'trip_${DateTime.now().millisecondsSinceEpoch}';
 
     final newTrip = TripModel(
@@ -191,7 +213,9 @@ class TripsNotifier extends Notifier<TripsState> {
       batch.set(inviteDoc, {
         'tripId': tripId,
         'inviteCode': inviteCode,
+        'createdBy': user?.uid ?? 'creator',
         'createdAt': FieldValue.serverTimestamp(),
+        'isActive': true,
       });
 
       await batch.commit();
@@ -208,67 +232,222 @@ class TripsNotifier extends Notifier<TripsState> {
   }
 
   /// Joins a trip safely by invite code.
-  /// Validates invite, prevents duplicate membership, and strictly enforces role = 'member'.
+  /// Atomically validates invite, verifies capacity (<25), prevents duplicates,
+  /// stores invite proof on the member document, and increments memberCount.
   Future<TripModel?> joinTripByCode(String code) async {
-    final normalized = code.trim().toUpperCase();
+    final normalized = normalizeInviteCode(code);
 
     if (FirebaseService.isInitialized) {
-      final inviteDoc = await FirebaseFirestore.instance
-          .collection('tripInvites')
-          .doc(normalized)
-          .get();
-
-      if (!inviteDoc.exists || inviteDoc.data() == null) {
-        throw Exception('Invalid or expired invite code.');
-      }
-
-      final tripId = inviteDoc.data()!['tripId'] as String;
-      final tripRef = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId);
-      final tripDoc = await tripRef.get();
-
-      if (!tripDoc.exists || tripDoc.data() == null) {
-        throw Exception(
-          'The trip associated with this invite code was not found.',
-        );
-      }
-
       final user = ref.read(authProvider).user;
-      final memberRef = tripRef.collection('members').doc(user?.uid ?? 'guest');
+      if (user == null) {
+        throw Exception('You must be signed in to join a trip.');
+      }
 
-      final existing = await memberRef.get();
-      if (!existing.exists) {
-        // Enforce role = 'member' (never allow caller-selected role)
-        await memberRef.set({
-          'uid': user?.uid ?? 'guest',
-          'displayName': user?.name ?? 'Member',
+      final firestore = FirebaseFirestore.instance;
+      final inviteRef = firestore.collection('tripInvites').doc(normalized);
+
+      debugPrint('[joinTripByCode] Starting join for invite code: $normalized');
+      final tripId = await firestore.runTransaction<String>((
+        transaction,
+      ) async {
+        // 1. Read and verify invite
+        debugPrint('[joinTripByCode] 1. READ tripInvites/$normalized');
+        final inviteSnapshot = await transaction.get(inviteRef);
+        if (!inviteSnapshot.exists || inviteSnapshot.data() == null) {
+          throw Exception('Invalid or expired invite code.');
+        }
+
+        final inviteData = inviteSnapshot.data()!;
+        final inviteTripId = inviteData['tripId'] as String?;
+        final isActive = inviteData['isActive'] as bool? ?? true;
+        final expiresAt = inviteData['expiresAt'] != null
+            ? (inviteData['expiresAt'] is Timestamp
+                  ? (inviteData['expiresAt'] as Timestamp).toDate()
+                  : DateTime.tryParse(inviteData['expiresAt'].toString()))
+            : null;
+
+        if (inviteTripId == null || inviteTripId.isEmpty) {
+          throw Exception('Invite code does not reference a valid trip.');
+        }
+        if (!isActive) {
+          throw Exception(
+            'This invite code has been revoked by the trip owner.',
+          );
+        }
+        if (expiresAt != null && DateTime.now().isAfter(expiresAt)) {
+          throw Exception('This invite code has expired.');
+        }
+
+        // 2. Read and verify trip
+        debugPrint('[joinTripByCode] 2. READ trips/$inviteTripId');
+        final tripRef = firestore.collection('trips').doc(inviteTripId);
+        final tripSnapshot = await transaction.get(tripRef);
+        if (!tripSnapshot.exists || tripSnapshot.data() == null) {
+          throw Exception(
+            'The trip associated with this invite code was not found.',
+          );
+        }
+
+        final tripData = tripSnapshot.data()!;
+
+        // 3. Read member document to check for duplicate membership
+        debugPrint(
+          '[joinTripByCode] 3. READ trips/$inviteTripId/members/${user.uid}',
+        );
+        final memberRef = tripRef.collection('members').doc(user.uid);
+        final memberSnapshot = await transaction.get(memberRef);
+
+        if (memberSnapshot.exists) {
+          // Idempotent: already a member, do not increment memberCount
+          debugPrint(
+            '[joinTripByCode] Already a member of trip $inviteTripId (idempotent)',
+          );
+          return inviteTripId;
+        }
+
+        // 4. Atomic capacity check
+        final currentMemberCount =
+            (tripData['memberCount'] as num?)?.toInt() ?? 1;
+        if (currentMemberCount >= AppConstants.maxCrewMembers) {
+          throw Exception(
+            'This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.',
+          );
+        }
+
+        // 5. Atomically create member document with invite proof
+        debugPrint(
+          '[joinTripByCode] 4. CREATE trips/$inviteTripId/members/${user.uid}',
+        );
+        transaction.set(memberRef, {
+          'uid': user.uid,
+          'displayName': user.name.isNotEmpty ? user.name : 'Member',
           'role': 'member',
+          'inviteCode': normalized,
           'joinedAt': FieldValue.serverTimestamp(),
           'isOnline': true,
         });
 
-        await tripRef.update({
-          'memberCount': FieldValue.increment(1),
+        // 6. Atomically increment memberCount
+        debugPrint(
+          '[joinTripByCode] 5. UPDATE trips/$inviteTripId (memberCount: ${currentMemberCount + 1})',
+        );
+        transaction.update(tripRef, {
+          'memberCount': currentMemberCount + 1,
           'updatedAt': FieldValue.serverTimestamp(),
         });
-      }
+
+        return inviteTripId;
+      });
+
+      debugPrint(
+        '[joinTripByCode] Transaction committed successfully for trip $tripId',
+      );
 
       await AnalyticsService.logTripJoined(tripId);
 
-      final joinedTrip = TripModel.fromMap(tripDoc.data()!, tripId);
+      final updatedTripDoc = await firestore
+          .collection('trips')
+          .doc(tripId)
+          .get();
+      final joinedTrip = TripModel.fromMap(updatedTripDoc.data()!, tripId);
       state = state.copyWith(activeTripId: tripId);
       return joinedTrip;
     } else {
-      // Local fallback for testing
+      // Local fallback for testing / offline
       final found = state.trips
           .where((t) => t.inviteCode == normalized)
           .firstOrNull;
       if (found != null) {
+        if (found.memberCount >= AppConstants.maxCrewMembers) {
+          throw Exception(
+            'This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.',
+          );
+        }
         state = state.copyWith(activeTripId: found.id);
         return found;
       }
       throw Exception('Invite code not found.');
+    }
+  }
+
+  /// Atomically removes a crew member and decrements trip memberCount.
+  /// The trip owner can NEVER be removed.
+  Future<void> removeMember({
+    required String tripId,
+    required String memberUid,
+  }) async {
+    if (FirebaseService.isInitialized) {
+      final firestore = FirebaseFirestore.instance;
+      final tripRef = firestore.collection('trips').doc(tripId);
+      final memberRef = tripRef.collection('members').doc(memberUid);
+
+      await firestore.runTransaction((transaction) async {
+        final tripSnapshot = await transaction.get(tripRef);
+        if (!tripSnapshot.exists || tripSnapshot.data() == null) {
+          throw Exception('Trip not found.');
+        }
+
+        final tripData = tripSnapshot.data()!;
+        final ownerId = tripData['ownerId'] as String?;
+
+        if (memberUid == ownerId) {
+          throw Exception('The trip owner cannot be removed from the crew.');
+        }
+
+        final memberSnapshot = await transaction.get(memberRef);
+        if (!memberSnapshot.exists) {
+          return; // Already removed
+        }
+
+        final currentCount = (tripData['memberCount'] as num?)?.toInt() ?? 1;
+        final newCount = (currentCount - 1).clamp(
+          1,
+          AppConstants.maxCrewMembers,
+        );
+
+        transaction.delete(memberRef);
+        transaction.update(tripRef, {
+          'memberCount': newCount,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      });
+    }
+  }
+
+  /// Revokes an active invite code for a trip.
+  /// Only the trip owner is permitted to revoke invites.
+  /// Historical trip memberships are completely preserved.
+  Future<void> revokeInvite({
+    required String tripId,
+    required String inviteCode,
+  }) async {
+    final normalized = normalizeInviteCode(inviteCode);
+    if (FirebaseService.isInitialized) {
+      final user = ref.read(authProvider).user;
+      final firestore = FirebaseFirestore.instance;
+      final inviteRef = firestore.collection('tripInvites').doc(normalized);
+      final inviteSnap = await inviteRef.get();
+
+      if (!inviteSnap.exists || inviteSnap.data() == null) {
+        throw Exception('Invite code not found.');
+      }
+
+      final data = inviteSnap.data()!;
+      if (data['tripId'] != tripId) {
+        throw Exception('Invite code does not belong to this trip.');
+      }
+
+      // Verify owner permission
+      final tripSnap = await firestore.collection('trips').doc(tripId).get();
+      if (tripSnap.exists && tripSnap.data()?['ownerId'] != user?.uid) {
+        throw Exception('Only the trip owner can revoke invite codes.');
+      }
+
+      await inviteRef.update({
+        'isActive': false,
+        'revokedAt': FieldValue.serverTimestamp(),
+        'revokedBy': user?.uid,
+      });
     }
   }
 

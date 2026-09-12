@@ -34,11 +34,6 @@ class AppShell extends StatelessWidget {
             label: 'Trips',
           ),
           NavigationDestination(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            selectedIcon: Icon(Icons.account_balance_wallet_rounded),
-            label: 'Wallet',
-          ),
-          NavigationDestination(
             icon: Icon(Icons.explore_outlined),
             selectedIcon: Icon(Icons.explore_rounded),
             label: 'Explore',

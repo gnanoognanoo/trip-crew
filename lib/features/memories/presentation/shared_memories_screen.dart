@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:developer' as developer;
+import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/services/cloudinary_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/memories/models/memory_model.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
@@ -25,6 +30,7 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
   StreamSubscription? _sub;
   List<MemoryModel> _memories = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -40,6 +46,7 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
     }
 
     if (FirebaseService.isInitialized) {
+      _sub?.cancel();
       _sub = FirebaseFirestore.instance
           .collection('trips')
           .doc(activeTrip.id)
@@ -56,11 +63,18 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                 setState(() {
                   _memories = loaded;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (err) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Network or access issue loading memories. Please check your connection.';
+                });
+              }
             },
           );
     } else {
@@ -77,101 +91,318 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
   void _showUploadDialog(String tripId) {
     final captionCtrl = TextEditingController();
     int dayNumber = 1;
+    Uint8List? selectedImageBytes;
+    String? selectedFilename;
+    bool isUploading = false;
+    String? uploadError;
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: const Text('Add Shared Memory'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                height: 120,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue.shade200),
-                ),
-                child: const Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      Icons.add_photo_alternate_rounded,
-                      size: 36,
-                      color: Colors.blue,
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: isUploading
+                      ? null
+                      : () async {
+                          try {
+                            final picker = ImagePicker();
+                            final picked = await picker.pickImage(
+                              source: ImageSource.gallery,
+                              maxWidth: 1920,
+                              maxHeight: 1080,
+                              imageQuality: 85,
+                            );
+                            if (picked != null) {
+                              final bytes = await picked.readAsBytes();
+                              setDialogState(() {
+                                selectedImageBytes = bytes;
+                                selectedFilename = picked.name;
+                                uploadError = null;
+                              });
+                            }
+                          } catch (e) {
+                            setDialogState(() {
+                              uploadError = 'Could not select image: $e';
+                            });
+                          }
+                        },
+                  child: Container(
+                    height: 140,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.blue.shade200),
                     ),
-                    SizedBox(height: 6),
-                    Text(
-                      'Select photo from device',
-                      style: TextStyle(fontSize: 12, color: Colors.blue),
-                    ),
-                  ],
+                    clipBehavior: Clip.antiAlias,
+                    child: selectedImageBytes != null
+                        ? Image.memory(selectedImageBytes!, fit: BoxFit.cover)
+                        : const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.add_photo_alternate_rounded,
+                                size: 36,
+                                color: Colors.blue,
+                              ),
+                              SizedBox(height: 6),
+                              Text(
+                                'Tap to choose photo from device',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.blue,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: captionCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Memory Caption (optional)',
-                ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                initialValue: dayNumber,
-                decoration: const InputDecoration(labelText: 'Day of Trip'),
-                items: const [
-                  DropdownMenuItem(value: 1, child: Text('Day 1')),
-                  DropdownMenuItem(value: 2, child: Text('Day 2')),
-                  DropdownMenuItem(value: 3, child: Text('Day 3')),
+                if (uploadError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    uploadError!,
+                    style: const TextStyle(color: Colors.red, fontSize: 12),
+                  ),
                 ],
-                onChanged: (val) => setDialogState(() => dayNumber = val!),
-              ),
-            ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: captionCtrl,
+                  enabled: !isUploading,
+                  decoration: const InputDecoration(
+                    labelText: 'Memory Caption (optional)',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<int>(
+                  initialValue: dayNumber,
+                  decoration: const InputDecoration(labelText: 'Day of Trip'),
+                  items: const [
+                    DropdownMenuItem(value: 1, child: Text('Day 1')),
+                    DropdownMenuItem(value: 2, child: Text('Day 2')),
+                    DropdownMenuItem(value: 3, child: Text('Day 3')),
+                    DropdownMenuItem(value: 4, child: Text('Day 4')),
+                    DropdownMenuItem(value: 5, child: Text('Day 5')),
+                  ],
+                  onChanged: isUploading
+                      ? null
+                      : (val) => setDialogState(() => dayNumber = val!),
+                ),
+                if (isUploading) ...[
+                  const SizedBox(height: 16),
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        'Uploading to Cloudinary...',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: isUploading ? null : () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () async {
-                final user = ref.read(authProvider).user;
-                final newMemory = MemoryModel(
-                  id: 'm_${DateTime.now().millisecondsSinceEpoch}',
-                  tripId: tripId,
-                  uploaderId: user?.uid ?? 'guest',
-                  photographerName: user?.name ?? 'Crew Member',
-                  mediaUrl:
-                      'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=800',
-                  dayNumber: dayNumber,
-                  caption: captionCtrl.text.trim().isNotEmpty
-                      ? captionCtrl.text.trim()
-                      : 'Unforgettable moments',
-                  createdAt: DateTime.now(),
-                );
+              onPressed: isUploading
+                  ? null
+                  : () async {
+                      final user = ref.read(authProvider).user;
+                      if (user == null || user.uid.isEmpty) {
+                        setDialogState(() {
+                          uploadError =
+                              'You must be signed in with Firebase to upload trip memories.';
+                        });
+                        return;
+                      }
 
-                if (FirebaseService.isInitialized) {
-                  await FirebaseFirestore.instance
-                      .collection('trips')
-                      .doc(tripId)
-                      .collection('memories')
-                      .doc(newMemory.id)
-                      .set(newMemory.toMap());
-                } else {
-                  setState(() => _memories.insert(0, newMemory));
-                }
+                      if (selectedImageBytes == null) {
+                        setDialogState(() {
+                          uploadError =
+                              'Please tap the area above to select an image first.';
+                        });
+                        return;
+                      }
 
-                await AnalyticsService.logMemoryUploaded(tripId);
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
+                      setDialogState(() {
+                        isUploading = true;
+                        uploadError = null;
+                      });
+
+                      String? uploadedPublicId;
+                      String? uploadedImageUrl;
+
+                      try {
+                        // 1. Upload to Cloudinary with validation & authorization guards
+                        final uploadRes = await CloudinaryService.uploadMemory(
+                          bytes: selectedImageBytes!,
+                          filename:
+                              selectedFilename ??
+                              'memory_${DateTime.now().millisecondsSinceEpoch}.jpg',
+                          tripId: tripId,
+                          uid: user.uid,
+                        );
+
+                        uploadedPublicId = uploadRes.publicId;
+                        uploadedImageUrl = uploadRes.secureUrl;
+
+                        // 2. Prepare MemoryModel with Cloudinary metadata
+                        final now = DateTime.now();
+                        final newMemory = MemoryModel(
+                          id: 'm_${now.millisecondsSinceEpoch}',
+                          tripId: tripId,
+                          uploaderId: user.uid,
+                          photographerName: user.name,
+                          imageUrl: uploadedImageUrl,
+                          publicId: uploadedPublicId,
+                          dayIndex: dayNumber,
+                          caption: captionCtrl.text.trim().isNotEmpty
+                              ? captionCtrl.text.trim()
+                              : 'Unforgettable moments',
+                          createdAt: now,
+                          capturedAt: now,
+                        );
+
+                        // 3. Write metadata to Firestore
+                        if (FirebaseService.isInitialized) {
+                          try {
+                            await FirebaseFirestore.instance
+                                .collection('trips')
+                                .doc(tripId)
+                                .collection('memories')
+                                .doc(newMemory.id)
+                                .set(
+                                  newMemory.toFirestoreMap(
+                                    useServerTimestamp: true,
+                                  ),
+                                );
+                          } catch (firestoreError) {
+                            developer.log(
+                              'ORPHAN_ASSET_ALERT: Cloudinary asset publicId=[$uploadedPublicId] '
+                              'URL=[$uploadedImageUrl] was uploaded, but Firestore write failed for trip [$tripId]. '
+                              'Asset is orphaned and should be cleaned up by backend service. Error: $firestoreError',
+                              name: 'TripCrewMedia',
+                              level: 1000,
+                            );
+                            throw Exception(
+                              'Photo uploaded, but failed to save to the trip. Please try again.',
+                            );
+                          }
+                        } else {
+                          setState(() => _memories.insert(0, newMemory));
+                        }
+
+                        await AnalyticsService.logMemoryUploaded(tripId);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        setDialogState(() {
+                          isUploading = false;
+                          if (e is CloudinaryValidationException) {
+                            uploadError = e.message;
+                          } else if (e is CloudinaryAuthException) {
+                            uploadError = e.message;
+                          } else if (e is CloudinaryUploadException) {
+                            uploadError = e.message;
+                          } else {
+                            uploadError = e.toString().replaceFirst(
+                              'Exception: ',
+                              '',
+                            );
+                          }
+                        });
+                      }
+                    },
               child: const Text('Upload'),
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _deleteMemory(MemoryModel memory, String tripId) async {
+    try {
+      final user = ref.read(authProvider).user;
+      if (FirebaseService.isInitialized) {
+        // 1. Delete memory document from Firestore
+        await FirebaseFirestore.instance
+            .collection('trips')
+            .doc(tripId)
+            .collection('memories')
+            .doc(memory.id)
+            .delete();
+
+        // 2. Queue for future backend Cloudinary remote deletion
+        if (memory.publicId.isNotEmpty) {
+          try {
+            await FirebaseFirestore.instance
+                .collection('mediaCleanupQueue')
+                .add({
+                  'publicId': memory.publicId,
+                  'tripId': tripId,
+                  'requestedBy': user?.uid ?? 'unknown',
+                  'createdAt': FieldValue.serverTimestamp(),
+                  'status': 'pending',
+                  'imageUrl': memory.imageUrl,
+                });
+            developer.log(
+              'MEDIA_CLEANUP_QUEUED: Enqueued publicId [${memory.publicId}] to mediaCleanupQueue',
+              name: 'TripCrewMedia',
+            );
+          } catch (queueErr) {
+            developer.log(
+              'MEDIA_CLEANUP_QUEUE_WARN: Failed to enqueue [${memory.publicId}]: $queueErr',
+              name: 'TripCrewMedia',
+            );
+          }
+        }
+      }
+
+      setState(() {
+        _memories.removeWhere((m) => m.id == memory.id);
+      });
+
+      developer.log(
+        'FIRESTORE_METADATA_DELETED: Memory document [${memory.id}] deleted from Firestore. '
+        'Notice: Remote Cloudinary asset [${memory.publicId}] was queued to mediaCleanupQueue.',
+        name: 'TripCrewMedia',
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Memory removed from trip. (Queued for remote media cleanup)',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete memory: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -223,6 +454,18 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? AppErrorState(
+                      title: 'Could Not Load Memories',
+                      message: _errorMessage!,
+                      onRetry: () {
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = null;
+                        });
+                        _listenToMemories();
+                      },
+                    )
                   : _memories.isEmpty
                   ? AppEmptyState(
                       icon: Icons.photo_library_outlined,
@@ -251,6 +494,11 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                           const [Color(0xFF8E2DE2), Color(0xFF4A00E0)],
                         ];
                         final grad = gradients[index % gradients.length];
+                        final currentUser = ref.watch(authProvider).user;
+                        final canDelete =
+                            currentUser != null &&
+                            (currentUser.uid == memory.uploaderId ||
+                                currentUser.uid == activeTrip.ownerId);
 
                         return InkWell(
                           onTap: () {
@@ -260,28 +508,77 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                                 title: Text(memory.caption ?? 'Trip Moment'),
                                 content: Column(
                                   mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Container(
-                                      height: 180,
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(colors: grad),
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Center(
-                                        child: Icon(
-                                          Icons.photo_rounded,
-                                          size: 64,
-                                          color: Colors.white,
-                                        ),
-                                      ),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: memory.imageUrl.isNotEmpty
+                                          ? Image.network(
+                                              memory.imageUrl,
+                                              height: 200,
+                                              width: double.infinity,
+                                              fit: BoxFit.cover,
+                                              errorBuilder:
+                                                  (
+                                                    context,
+                                                    error,
+                                                    stackTrace,
+                                                  ) => Container(
+                                                    height: 180,
+                                                    decoration: BoxDecoration(
+                                                      gradient: LinearGradient(
+                                                        colors: grad,
+                                                      ),
+                                                    ),
+                                                    child: const Center(
+                                                      child: Icon(
+                                                        Icons.photo_rounded,
+                                                        size: 64,
+                                                        color: Colors.white,
+                                                      ),
+                                                    ),
+                                                  ),
+                                            )
+                                          : Container(
+                                              height: 180,
+                                              decoration: BoxDecoration(
+                                                gradient: LinearGradient(
+                                                  colors: grad,
+                                                ),
+                                              ),
+                                              child: const Center(
+                                                child: Icon(
+                                                  Icons.photo_rounded,
+                                                  size: 64,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
                                     ),
                                     const SizedBox(height: 12),
                                     Text(
-                                      'Captured by ${memory.photographerName} on Day ${memory.dayNumber}',
+                                      'Captured by ${memory.photographerName} • Day ${memory.dayNumber}',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
                                     ),
                                   ],
                                 ),
                                 actions: [
+                                  if (canDelete)
+                                    TextButton(
+                                      onPressed: () async {
+                                        Navigator.pop(ctx);
+                                        await _deleteMemory(
+                                          memory,
+                                          activeTrip.id,
+                                        );
+                                      },
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: Colors.red,
+                                      ),
+                                      child: const Text('Delete'),
+                                    ),
                                   TextButton(
                                     onPressed: () => Navigator.pop(ctx),
                                     child: const Text('Close'),
@@ -295,11 +592,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                           ),
                           child: Container(
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: grad,
-                              ),
                               borderRadius: BorderRadius.circular(
                                 AppConstants.radiusLg,
                               ),
@@ -311,15 +603,66 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                                 ),
                               ],
                             ),
+                            clipBehavior: Clip.antiAlias,
                             child: Stack(
+                              fit: StackFit.expand,
                               children: [
-                                const Center(
-                                  child: Icon(
-                                    Icons.photo_camera_back_rounded,
-                                    color: Colors.white70,
-                                    size: 48,
+                                if (memory.imageUrl.isNotEmpty)
+                                  Image.network(
+                                    memory.imageUrl,
+                                    fit: BoxFit.cover,
+                                    errorBuilder:
+                                        (
+                                          context,
+                                          error,
+                                          stackTrace,
+                                        ) => Container(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              colors: grad,
+                                            ),
+                                          ),
+                                          child: const Center(
+                                            child: Icon(
+                                              Icons.photo_camera_back_rounded,
+                                              color: Colors.white70,
+                                              size: 48,
+                                            ),
+                                          ),
+                                        ),
+                                    loadingBuilder:
+                                        (context, child, loadingProgress) {
+                                          if (loadingProgress == null) {
+                                            return child;
+                                          }
+                                          return Container(
+                                            color: Colors.black12,
+                                            child: const Center(
+                                              child: SizedBox(
+                                                width: 24,
+                                                height: 24,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                    ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                  )
+                                else
+                                  Container(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(colors: grad),
+                                    ),
+                                    child: const Center(
+                                      child: Icon(
+                                        Icons.photo_camera_back_rounded,
+                                        color: Colors.white70,
+                                        size: 48,
+                                      ),
+                                    ),
                                   ),
-                                ),
                                 Positioned(
                                   bottom: 0,
                                   left: 0,
@@ -334,14 +677,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                                           Colors.black.withValues(alpha: 0.8),
                                           Colors.transparent,
                                         ],
-                                      ),
-                                      borderRadius: const BorderRadius.only(
-                                        bottomLeft: Radius.circular(
-                                          AppConstants.radiusLg,
-                                        ),
-                                        bottomRight: Radius.circular(
-                                          AppConstants.radiusLg,
-                                        ),
                                       ),
                                     ),
                                     child: Column(

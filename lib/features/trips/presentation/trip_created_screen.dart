@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/features/trips/models/trip_model.dart';
 
 /// Screen 5: Trip Created confirmation screen with invite code copy & share.
@@ -156,6 +157,7 @@ class TripCreatedScreen extends StatelessWidget {
                     child: OutlinedButton.icon(
                       onPressed: () {
                         Clipboard.setData(ClipboardData(text: trip.inviteCode));
+                        AnalyticsService.logInviteShared(trip.id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Invite code copied to clipboard!'),
@@ -170,6 +172,7 @@ class TripCreatedScreen extends StatelessWidget {
                   Expanded(
                     child: FilledButton.icon(
                       onPressed: () {
+                        AnalyticsService.logInviteShared(trip.id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(

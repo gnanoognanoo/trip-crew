@@ -12,9 +12,11 @@ import 'package:tripcrew/features/explorer/presentation/nearby_explorer_screen.d
 import 'package:tripcrew/features/home/presentation/home_screen.dart';
 import 'package:tripcrew/features/itinerary/presentation/itinerary_screen.dart';
 import 'package:tripcrew/features/maps/presentation/live_crew_location_screen.dart';
+import 'package:tripcrew/features/maps/presentation/map_coming_soon_screen.dart';
 import 'package:tripcrew/features/memories/presentation/shared_memories_screen.dart';
-import 'package:tripcrew/features/payments/presentation/wallet_pay_screen.dart';
-import 'package:tripcrew/features/payments/presentation/wallet_screen.dart';
+import 'package:tripcrew/features/trip_pay/presentation/trip_pay_screen.dart';
+import 'package:tripcrew/features/trip_pay/presentation/add_contribution_screen.dart';
+import 'package:tripcrew/features/trip_pay/presentation/pay_from_pot_screen.dart';
 import 'package:tripcrew/features/profile/presentation/profile_screen.dart';
 import 'package:tripcrew/features/pulse/presentation/trip_pulse_screen.dart';
 import 'package:tripcrew/features/recap/presentation/trip_recap_screen.dart';
@@ -122,16 +124,34 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ExpensesScreen(),
       ),
       GoRoute(
-        path: '/wallet-pay',
-        name: 'wallet-pay',
+        path: '/trip-pay',
+        name: 'trip-pay',
         parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const WalletPayScreen(),
+        builder: (context, state) => const TripPayScreen(),
+      ),
+      GoRoute(
+        path: '/trip-pay/contribute',
+        name: 'trip-pay-contribute',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const AddContributionScreen(),
+      ),
+      GoRoute(
+        path: '/trip-pay/pay',
+        name: 'trip-pay-pay',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const PayFromPotScreen(),
       ),
       GoRoute(
         path: '/live-location',
         name: 'live-location',
         parentNavigatorKey: rootNavigatorKey,
         builder: (context, state) => const LiveCrewLocationScreen(),
+      ),
+      GoRoute(
+        path: '/map',
+        name: 'map',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const MapComingSoonScreen(),
       ),
       GoRoute(
         path: '/pulse',
@@ -188,19 +208,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Branch 2: Wallet
-          StatefulShellBranch(
-            routes: [
-              GoRoute(
-                path: '/wallet',
-                name: 'wallet',
-                pageBuilder: (context, state) =>
-                    const NoTransitionPage(child: WalletScreen()),
-              ),
-            ],
-          ),
-
-          // Branch 3: Explore
+          // Branch 2: Explore
           StatefulShellBranch(
             routes: [
               GoRoute(
@@ -212,7 +220,7 @@ final routerProvider = Provider<GoRouter>((ref) {
             ],
           ),
 
-          // Branch 4: Profile
+          // Branch 3: Profile
           StatefulShellBranch(
             routes: [
               GoRoute(

@@ -24,6 +24,7 @@ class _JoinTripScreenState extends ConsumerState<JoinTripScreen> {
   }
 
   Future<void> _handleJoinTrip() async {
+    if (_isJoining) return;
     final code = _codeController.text.trim();
     if (code.isEmpty) {
       setState(() => _error = 'Please enter an invite code.');
@@ -44,7 +45,17 @@ class _JoinTripScreenState extends ConsumerState<JoinTripScreen> {
         context.go('/workspace');
       }
     } catch (e) {
-      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
+      debugPrint('[JoinTripScreen] Failed to join trip: $e');
+      final rawError = e.toString();
+      if (rawError.contains('permission-denied') ||
+          rawError.contains('PERMISSION_DENIED')) {
+        setState(
+          () => _error =
+              "We couldn't join this trip. Check the invite code and try again.",
+        );
+      } else {
+        setState(() => _error = rawError.replaceAll('Exception: ', ''));
+      }
     } finally {
       if (mounted) setState(() => _isJoining = false);
     }

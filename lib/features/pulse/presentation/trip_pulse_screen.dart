@@ -6,11 +6,13 @@ import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/pulse/models/trip_pulse.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
 /// Screen 15: Trip Pulse screen connected to real Firestore trips/{tripId}/pulses.
+/// Allows members to broadcast and view current needs (Hungry, Break, Tired, Emergency, etc.)
 class TripPulseScreen extends ConsumerStatefulWidget {
   const TripPulseScreen({super.key});
 
@@ -23,55 +25,64 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
   String? _myPulse;
   final Map<String, int> _pulseCounts = {};
   bool _isLoading = true;
+  String? _errorMessage;
 
   final List<Map<String, dynamic>> _pulseOptions = const [
     {
+      'type': PulseType.hungry,
       'title': 'Hungry',
       'icon': Icons.restaurant_rounded,
       'color': Color(0xFFF97316),
-      'emoji': '🍕',
+      'emoji': '🍔',
+      'durationMinutes': 60,
     },
     {
-      'title': 'Need Coffee',
+      'type': PulseType.needBreak,
+      'title': 'Need a Break',
       'icon': Icons.local_cafe_rounded,
       'color': Color(0xFF3B82F6),
       'emoji': '☕',
+      'durationMinutes': 30,
     },
     {
-      'title': 'Need Fuel',
-      'icon': Icons.local_gas_station_rounded,
-      'color': Color(0xFF10B981),
-      'emoji': '⛽',
-    },
-    {
+      'type': PulseType.restroom,
       'title': 'Restroom',
       'icon': Icons.wc_rounded,
       'color': Color(0xFF06B6D4),
       'emoji': '🚻',
+      'durationMinutes': 30,
     },
     {
+      'type': PulseType.needFuel,
+      'title': 'Need Fuel',
+      'icon': Icons.local_gas_station_rounded,
+      'color': Color(0xFF10B981),
+      'emoji': '⛽',
+      'durationMinutes': 60,
+    },
+    {
+      'type': PulseType.tired,
       'title': 'Tired',
       'icon': Icons.bed_rounded,
-      'color': Color(0xFFD97706),
-      'emoji': '🥱',
+      'color': Color(0xFF8B5CF6),
+      'emoji': '😴',
+      'durationMinutes': 60,
     },
     {
+      'type': PulseType.wantPhotos,
       'title': 'Want Photos',
       'icon': Icons.camera_alt_rounded,
-      'color': Color(0xFF8B5CF6),
+      'color': Color(0xFFEC4899),
       'emoji': '📸',
+      'durationMinutes': 60,
     },
     {
-      'title': 'Need Break',
-      'icon': Icons.pan_tool_rounded,
-      'color': Color(0xFFE11D48),
-      'emoji': '🛑',
-    },
-    {
+      'type': PulseType.emergency,
       'title': 'Emergency',
       'icon': Icons.warning_amber_rounded,
       'color': Color(0xFFDC2626),
       'emoji': '🚨',
+      'durationMinutes': 120,
     },
   ];
 
@@ -103,8 +114,8 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
 
               for (final doc in snapshot.docs) {
                 final pulse = TripPulse.fromMap(doc.data(), doc.id);
-                // Only count pulses from the last 2 hours
-                if (DateTime.now().difference(pulse.timestamp).inHours < 2) {
+                // Only count active, unexpired pulses
+                if (pulse.isCurrentlyActive) {
                   counts[pulse.pulseType] = (counts[pulse.pulseType] ?? 0) + 1;
                   if (doc.id == user?.uid) {
                     myCurrent = pulse.pulseType;
@@ -118,11 +129,18 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                   _pulseCounts.addAll(counts);
                   _myPulse = myCurrent;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (e) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Could not load pulse data. Check your connection.';
+                });
+              }
             },
           );
     } else {
@@ -136,22 +154,74 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
     super.dispose();
   }
 
-  void _selectPulse(String title, String tripId) async {
+  Future<bool> _confirmEmergencyPulse() async {
+    final res = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(
+          Icons.warning_amber_rounded,
+          color: Color(0xFFDC2626),
+          size: 40,
+        ),
+        title: const Text(
+          'Send Emergency Pulse to your crew?',
+          textAlign: TextAlign.center,
+        ),
+        content: const Text(
+          'This sends an urgent in-app alert to your crew members.\n\n'
+          'Note: This does NOT contact police, ambulance, or emergency services.',
+          style: TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    return res ?? false;
+  }
+
+  Future<void> _selectPulse(Map<String, dynamic> opt, String tripId) async {
+    final PulseType pType = opt['type'] as PulseType;
+    final String title = opt['title'] as String;
+
+    if (pType == PulseType.emergency) {
+      final confirmed = await _confirmEmergencyPulse();
+      if (!confirmed || !mounted) return;
+    }
+
     final user = ref.read(authProvider).user;
     setState(() => _myPulse = title);
 
+    final now = DateTime.now();
+    final expiresAt = now.add(pType.defaultDuration);
+
     if (FirebaseService.isInitialized && user != null) {
+      final pulse = TripPulse(
+        uid: user.uid,
+        memberName: user.name,
+        pulseType: title,
+        type: pType.key,
+        createdAt: now,
+        expiresAt: expiresAt,
+        isActive: true,
+      );
+
       await FirebaseFirestore.instance
           .collection('trips')
           .doc(tripId)
           .collection('pulses')
           .doc(user.uid)
-          .set({
-            'uid': user.uid,
-            'memberName': user.name,
-            'pulseType': title,
-            'timestamp': FieldValue.serverTimestamp(),
-          });
+          .set(pulse.toMap());
     }
 
     await AnalyticsService.logPulseSent(tripId, title);
@@ -159,8 +229,47 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Pulse updated: $title shared with crew!'),
+          content: Text(
+            'Pulse updated: ${opt['emoji']} $title shared with crew!',
+          ),
           duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _clearPulse(String tripId) async {
+    final user = ref.read(authProvider).user;
+    setState(() => _myPulse = null);
+
+    if (FirebaseService.isInitialized && user != null) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('trips')
+            .doc(tripId)
+            .collection('pulses')
+            .doc(user.uid)
+            .delete();
+      } catch (_) {
+        // Fallback merge
+        await FirebaseFirestore.instance
+            .collection('trips')
+            .doc(tripId)
+            .collection('pulses')
+            .doc(user.uid)
+            .set({
+              'uid': user.uid,
+              'isActive': false,
+              'expiresAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+      }
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pulse status cleared'),
+          duration: Duration(seconds: 2),
         ),
       );
     }
@@ -185,6 +294,14 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
+        actions: [
+          if (_myPulse != null)
+            TextButton.icon(
+              onPressed: () => _clearPulse(activeTrip.id),
+              icon: const Icon(Icons.clear_rounded, size: 16),
+              label: const Text('Clear Status'),
+            ),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -197,31 +314,50 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                 AppConstants.spaceLg,
                 AppConstants.spaceMd,
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    'How are you feeling?',
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Tap a pulse to share your real-time need with your crew in ${activeTrip.name}.',
-                    style: TextStyle(
-                      color: theme.colorScheme.onSurfaceVariant,
-                      fontSize: 13,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'How are you feeling?',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Tap a pulse to share your real-time need with your crew in ${activeTrip.name}.',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
 
-            // 2x4 Pulse Options Grid
+            // Pulse Options Grid
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? AppErrorState(
+                      title: 'Could not load pulse data',
+                      message: _errorMessage!,
+                      onRetry: () {
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = null;
+                        });
+                        _listenToPulses();
+                      },
+                    )
                   : GridView.builder(
                       padding: const EdgeInsets.symmetric(
                         horizontal: AppConstants.spaceLg,
@@ -231,7 +367,7 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                             crossAxisCount: 2,
                             crossAxisSpacing: 12,
                             mainAxisSpacing: 12,
-                            childAspectRatio: 1.4,
+                            childAspectRatio: 1.35,
                           ),
                       itemCount: _pulseOptions.length,
                       itemBuilder: (context, index) {
@@ -241,8 +377,7 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                         final count = _pulseCounts[opt['title']] ?? 0;
 
                         return InkWell(
-                          onTap: () =>
-                              _selectPulse(opt['title'], activeTrip.id),
+                          onTap: () => _selectPulse(opt, activeTrip.id),
                           borderRadius: BorderRadius.circular(
                             AppConstants.radiusLg,
                           ),
@@ -258,7 +393,7 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                                 color: isSelected
                                     ? color
                                     : theme.colorScheme.outlineVariant,
-                                width: isSelected ? 2.0 : 1.0,
+                                width: isSelected ? 2.5 : 1.0,
                               ),
                             ),
                             child: Stack(
@@ -267,17 +402,9 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(10),
-                                        decoration: BoxDecoration(
-                                          color: color.withValues(alpha: 0.15),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Icon(
-                                          opt['icon'],
-                                          color: color,
-                                          size: 26,
-                                        ),
+                                      Text(
+                                        opt['emoji'],
+                                        style: const TextStyle(fontSize: 32),
                                       ),
                                       const SizedBox(height: 8),
                                       Text(
@@ -290,6 +417,15 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                                           color: isSelected
                                               ? color
                                               : theme.colorScheme.onSurface,
+                                        ),
+                                      ),
+                                      Text(
+                                        '${opt['durationMinutes']}m expiry',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: theme
+                                              .colorScheme
+                                              .onSurfaceVariant,
                                         ),
                                       ),
                                     ],
@@ -339,16 +475,26 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Crew Pulse Status',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Crew Pulse Status',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (_myPulse != null)
+                        TextButton(
+                          onPressed: () => _clearPulse(activeTrip.id),
+                          child: const Text('Clear Status'),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   if (_pulseCounts.isEmpty)
                     Text(
-                      'No active pulses in the last 2 hours. Tap a card above to check in.',
+                      'No active pulses right now. Tap an option above to share your need.',
                       style: TextStyle(
                         color: theme.colorScheme.onSurfaceVariant,
                         fontSize: 12,
@@ -361,7 +507,10 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                       children: _pulseCounts.entries.map((entry) {
                         final opt = _pulseOptions.firstWhere(
                           (o) => o['title'] == entry.key,
-                          orElse: () => {'emoji': '📍'},
+                          orElse: () => {
+                            'emoji':
+                                PulseType.fromString(entry.key)?.emoji ?? '📍',
+                          },
                         );
                         return Container(
                           padding: const EdgeInsets.symmetric(
@@ -374,7 +523,7 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
                             border: Border.all(color: Colors.grey.shade300),
                           ),
                           child: Text(
-                            '${opt['emoji']} ${entry.value} ${entry.key.toLowerCase()}',
+                            '${opt['emoji']} ${entry.value} ${entry.key}',
                             style: const TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 12,

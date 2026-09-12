@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
+import 'package:tripcrew/features/trip_pay/providers/trip_pay_notifier.dart';
 import 'package:tripcrew/features/trips/models/trip_model.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -143,6 +145,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
 
+            // TripCrew Pay Quick Action when active trip exists
+            if (activeTrip != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppConstants.spaceLg,
+                    vertical: AppConstants.spaceXs,
+                  ),
+                  child: _buildTripPayQuickActionCard(
+                    context,
+                    tripsState.trips
+                        .where((t) => t.status == 'active')
+                        .toList(),
+                    activeTrip,
+                  ),
+                ),
+              ),
+
             // Quick Hub Grid (Itinerary, Expenses, Map, Packing, Memories, Crew)
             SliverToBoxAdapter(
               child: Padding(
@@ -172,8 +192,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         const SizedBox(width: AppConstants.spaceMd),
                         _buildHubItem(
                           context,
-                          title: 'Map',
-                          icon: Icons.map_rounded,
+                          title: 'Live Crew',
+                          icon: Icons.radar_rounded,
                           color: const Color(0xFF10B981),
                           onTap: () => context.push('/live-location'),
                         ),
@@ -315,6 +335,211 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  void _openTripPot(List<TripModel> activeTrips, TripModel defaultTrip) {
+    if (activeTrips.length > 1) {
+      showModalBottomSheet(
+        context: context,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(AppConstants.spaceLg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.savings_rounded,
+                        color: Color(0xFF10B981),
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Select Active Trip',
+                      style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Multiple trips are currently active. Choose which Trip Pot you want to open:',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                const SizedBox(height: AppConstants.spaceMd),
+                ...activeTrips.map(
+                  (t) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: const Color(
+                        0xFF0F4C81,
+                      ).withValues(alpha: 0.1),
+                      child: const Icon(
+                        Icons.luggage_rounded,
+                        color: Color(0xFF0F4C81),
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(
+                      t.name,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text('${t.startingPlace} → ${t.destination}'),
+                    trailing: const Icon(Icons.chevron_right, size: 20),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      ref.read(tripsProvider.notifier).setActiveTrip(t.id);
+                      context.push('/trip-pay');
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } else {
+      final tripId = activeTrips.isNotEmpty
+          ? activeTrips.first.id
+          : defaultTrip.id;
+      ref.read(tripsProvider.notifier).setActiveTrip(tripId);
+      context.push('/trip-pay');
+    }
+  }
+
+  Widget _buildTripPayQuickActionCard(
+    BuildContext context,
+    List<TripModel> activeTrips,
+    TripModel activeTrip,
+  ) {
+    final theme = Theme.of(context);
+    final tripPayState = ref.watch(tripPayProvider);
+    final availablePaise = tripPayState.summary?.availableBalancePaise ?? 0;
+    final formattedBalance = CurrencyFormatter.formatUnits(availablePaise);
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppConstants.radiusLg),
+        side: BorderSide(
+          color: const Color(0xFF10B981).withValues(alpha: 0.35),
+          width: 1.2,
+        ),
+      ),
+      child: InkWell(
+        onTap: () => _openTripPot(activeTrips, activeTrip),
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppConstants.spaceLg,
+            vertical: AppConstants.spaceMd,
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                const Color(0xFF0F4C81).withValues(alpha: 0.06),
+                const Color(0xFF10B981).withValues(alpha: 0.12),
+              ],
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF0F4C81), Color(0xFF10B981)],
+                  ),
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+                ),
+                child: const Icon(
+                  Icons.savings_rounded,
+                  color: Colors.white,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: AppConstants.spaceMd),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          'TripCrew Pay',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
+                        if (activeTrips.length > 1) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              '${activeTrips.length} active',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: theme.colorScheme.primary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$formattedBalance available',
+                      style: const TextStyle(
+                        color: Color(0xFF059669),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              FilledButton.tonal(
+                onPressed: () => _openTripPot(activeTrips, activeTrip),
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: const Text(
+                  'Open Trip Pot',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -484,6 +709,82 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           ),
                         ),
                         const Spacer(),
+                        InkWell(
+                          onTap: () {
+                            ref
+                                .read(tripsProvider.notifier)
+                                .setActiveTrip(trip.id);
+                            context.push('/pulse');
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(
+                                AppConstants.radiusMd,
+                              ),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('⚡', style: TextStyle(fontSize: 12)),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Pulse',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        InkWell(
+                          onTap: () {
+                            ref
+                                .read(tripsProvider.notifier)
+                                .setActiveTrip(trip.id);
+                            context.push('/trip-pay');
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
+                            ),
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(
+                                AppConstants.radiusMd,
+                              ),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.savings_rounded,
+                                  size: 14,
+                                  color: Colors.white,
+                                ),
+                                SizedBox(width: 4),
+                                Text(
+                                  'Trip Pot',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,

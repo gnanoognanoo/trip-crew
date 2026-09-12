@@ -8,6 +8,7 @@ import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/expenses/models/expense_model.dart';
 import 'package:tripcrew/features/expenses/utils/settlement_calculator.dart';
@@ -29,6 +30,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   List<ExpenseModel> _expenses = [];
   Map<String, String> _memberNames = {};
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -44,19 +46,32 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
     }
 
     if (FirebaseService.isInitialized) {
+      _expensesSub?.cancel();
+      _membersSub?.cancel();
+
       // Listen to members
       _membersSub = FirebaseFirestore.instance
           .collection('trips')
           .doc(activeTrip.id)
           .collection('members')
           .snapshots()
-          .listen((snapshot) {
-            final map = <String, String>{};
-            for (final doc in snapshot.docs) {
-              map[doc.id] = doc.data()['displayName'] as String? ?? 'Member';
-            }
-            if (mounted) setState(() => _memberNames = map);
-          });
+          .listen(
+            (snapshot) {
+              final map = <String, String>{};
+              for (final doc in snapshot.docs) {
+                map[doc.id] = doc.data()['displayName'] as String? ?? 'Member';
+              }
+              if (mounted) setState(() => _memberNames = map);
+            },
+            onError: (_) {
+              if (mounted) {
+                setState(() {
+                  _errorMessage =
+                      'Could not sync crew members. Please check connection.';
+                });
+              }
+            },
+          );
 
       // Listen to expenses
       _expensesSub = FirebaseFirestore.instance
@@ -75,11 +90,18 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 setState(() {
                   _expenses = loaded;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (err) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Could not sync expenses. Please check connection.';
+                });
+              }
             },
           );
     } else {
@@ -107,6 +129,8 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         user?.uid ??
         (_memberNames.keys.isNotEmpty ? _memberNames.keys.first : 'self');
 
+    bool isSubmitting = false;
+
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -117,6 +141,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             children: [
               TextField(
                 controller: descCtrl,
+                enabled: !isSubmitting,
                 decoration: const InputDecoration(
                   labelText: 'Description (e.g. Dinner)',
                 ),
@@ -124,6 +149,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: amountCtrl,
+                enabled: !isSubmitting,
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
@@ -145,7 +171,9 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                   DropdownMenuItem(value: 'Shopping', child: Text('Shopping')),
                   DropdownMenuItem(value: 'Other', child: Text('Other')),
                 ],
-                onChanged: (val) => setDialogState(() => category = val!),
+                onChanged: isSubmitting
+                    ? null
+                    : (val) => setDialogState(() => category = val!),
               ),
               const SizedBox(height: 8),
               if (_memberNames.isNotEmpty)
@@ -162,62 +190,90 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                         ),
                       )
                       .toList(),
-                  onChanged: (val) => setDialogState(() => paidBy = val!),
+                  onChanged: isSubmitting
+                      ? null
+                      : (val) => setDialogState(() => paidBy = val!),
                 ),
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () async {
-                final amount = double.tryParse(amountCtrl.text) ?? 0.0;
-                if (descCtrl.text.trim().isNotEmpty && amount > 0) {
-                  final amountPaise = CurrencyFormatter.toSmallestUnit(amount);
-                  final payerName =
-                      _memberNames[paidBy] ?? user?.name ?? 'Member';
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amount = double.tryParse(amountCtrl.text) ?? 0.0;
+                      if (descCtrl.text.trim().isNotEmpty && amount > 0) {
+                        setDialogState(() => isSubmitting = true);
+                        try {
+                          final amountPaise = CurrencyFormatter.toSmallestUnit(
+                            amount,
+                          );
+                          final payerName =
+                              _memberNames[paidBy] ?? user?.name ?? 'Member';
 
-                  final newExpense = ExpenseModel(
-                    id: 'e_${DateTime.now().millisecondsSinceEpoch}',
-                    description: descCtrl.text.trim(),
-                    amountPaise: amountPaise,
-                    category: category,
-                    paidByUid: paidBy,
-                    paidByName: payerName,
-                    participantUids: _memberNames.keys.toList(),
-                    createdBy: user?.uid ?? 'guest',
-                    createdAt: DateTime.now(),
-                  );
+                          final newExpense = ExpenseModel(
+                            id: 'e_${DateTime.now().millisecondsSinceEpoch}',
+                            description: descCtrl.text.trim(),
+                            amountPaise: amountPaise,
+                            category: category,
+                            paidByUid: paidBy,
+                            paidByName: payerName,
+                            participantUids: _memberNames.keys.toList(),
+                            createdBy: user?.uid ?? 'guest',
+                            createdAt: DateTime.now(),
+                          );
 
-                  if (FirebaseService.isInitialized) {
-                    final batch = FirebaseFirestore.instance.batch();
-                    final expenseRef = FirebaseFirestore.instance
-                        .collection('trips')
-                        .doc(tripId)
-                        .collection('expenses')
-                        .doc(newExpense.id);
-                    final tripRef = FirebaseFirestore.instance
-                        .collection('trips')
-                        .doc(tripId);
+                          if (FirebaseService.isInitialized) {
+                            final batch = FirebaseFirestore.instance.batch();
+                            final expenseRef = FirebaseFirestore.instance
+                                .collection('trips')
+                                .doc(tripId)
+                                .collection('expenses')
+                                .doc(newExpense.id);
+                            final tripRef = FirebaseFirestore.instance
+                                .collection('trips')
+                                .doc(tripId);
 
-                    batch.set(expenseRef, newExpense.toMap());
-                    batch.update(tripRef, {
-                      'totalSpendingPaise': FieldValue.increment(amountPaise),
-                      'updatedAt': FieldValue.serverTimestamp(),
-                    });
+                            batch.set(expenseRef, newExpense.toMap());
+                            batch.update(tripRef, {
+                              'totalSpendingPaise': FieldValue.increment(
+                                amountPaise,
+                              ),
+                              'updatedAt': FieldValue.serverTimestamp(),
+                            });
 
-                    await batch.commit();
-                  } else {
-                    setState(() => _expenses.insert(0, newExpense));
-                  }
+                            await batch.commit();
+                          } else {
+                            setState(() => _expenses.insert(0, newExpense));
+                          }
 
-                  await AnalyticsService.logExpenseAdded(tripId, amount);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                }
-              },
-              child: const Text('Add Expense'),
+                          await AnalyticsService.logExpenseAdded(
+                            tripId,
+                            category: category,
+                            paymentSource: 'manual',
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        } finally {
+                          if (ctx.mounted) {
+                            setDialogState(() => isSubmitting = false);
+                          }
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Add Expense'),
             ),
           ],
         ),
@@ -334,6 +390,18 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
               Expanded(
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())
+                    : _errorMessage != null
+                    ? AppErrorState(
+                        title: 'Could not load expenses',
+                        message: _errorMessage!,
+                        onRetry: () {
+                          setState(() {
+                            _isLoading = true;
+                            _errorMessage = null;
+                          });
+                          _listenToExpensesAndMembers();
+                        },
+                      )
                     : filteredExpenses.isEmpty
                     ? AppEmptyState(
                         icon: Icons.receipt_long_rounded,

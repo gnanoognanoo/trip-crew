@@ -15,10 +15,10 @@ class CreateTripScreen extends ConsumerStatefulWidget {
 
 class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController(text: 'Goa Weekend');
-  final _startingPlaceController = TextEditingController(text: 'Chennai');
-  final _destinationController = TextEditingController(text: 'Goa');
-  final _budgetController = TextEditingController(text: '20000');
+  final _nameController = TextEditingController();
+  final _startingPlaceController = TextEditingController();
+  final _destinationController = TextEditingController();
+  final _budgetController = TextEditingController();
 
   DateTime _startDate = DateTime.now().add(const Duration(days: 7));
   DateTime _endDate = DateTime.now().add(const Duration(days: 10));
@@ -65,6 +65,7 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
   }
 
   Future<void> _handleCreateTrip() async {
+    if (_isSubmitting) return;
     if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSubmitting = true);
@@ -87,9 +88,11 @@ class _CreateTripScreenState extends ConsumerState<CreateTripScreen> {
       }
     } catch (e) {
       if (mounted) {
+        String friendlyMessage =
+            "We couldn't create your trip. Please try again.";
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('Could not create trip: $e')));
+        ).showSnackBar(SnackBar(content: Text(friendlyMessage)));
       }
     } finally {
       if (mounted) setState(() => _isSubmitting = false);

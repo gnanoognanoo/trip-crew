@@ -7,6 +7,7 @@ import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/itinerary/models/itinerary_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -23,6 +24,7 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
   StreamSubscription? _sub;
   List<ItineraryItem> _items = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -54,11 +56,18 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                 setState(() {
                   _items = loaded;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (e) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Could not load itinerary. Check your connection.';
+                });
+              }
             },
           );
     } else {
@@ -77,71 +86,95 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
     final titleCtrl = TextEditingController();
     final timeCtrl = TextEditingController(text: '10:00 AM');
     final placeCtrl = TextEditingController();
+    bool isSubmitting = false;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Add Day $_selectedDay Activity'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtrl,
-              decoration: const InputDecoration(labelText: 'Activity Name'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: timeCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Time (e.g. 02:30 PM)',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text('Add Day $_selectedDay Activity'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(labelText: 'Activity Name'),
               ),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: placeCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Place / Location (optional)',
+              const SizedBox(height: 8),
+              TextField(
+                controller: timeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Time (e.g. 02:30 PM)',
+                ),
               ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: placeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Place / Location (optional)',
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (titleCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        final newItem = ItineraryItem(
+                          id: 'it_${DateTime.now().millisecondsSinceEpoch}',
+                          dayNumber: _selectedDay,
+                          time: timeCtrl.text,
+                          title: titleCtrl.text.trim(),
+                          placeName: placeCtrl.text.trim().isEmpty
+                              ? null
+                              : placeCtrl.text.trim(),
+                          order: _items.length + 1,
+                        );
+
+                        if (FirebaseService.isInitialized) {
+                          await FirebaseFirestore.instance
+                              .collection('trips')
+                              .doc(tripId)
+                              .collection('itinerary')
+                              .doc(newItem.id)
+                              .set(newItem.toMap());
+                        } else {
+                          setState(() => _items.add(newItem));
+                        }
+
+                        await AnalyticsService.logItineraryItemAdded(tripId);
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Failed to add activity. Check connection.',
+                              ),
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Add Activity'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              if (titleCtrl.text.trim().isNotEmpty) {
-                final newItem = ItineraryItem(
-                  id: 'it_${DateTime.now().millisecondsSinceEpoch}',
-                  dayNumber: _selectedDay,
-                  time: timeCtrl.text,
-                  title: titleCtrl.text.trim(),
-                  placeName: placeCtrl.text.trim().isEmpty
-                      ? null
-                      : placeCtrl.text.trim(),
-                  order: _items.length + 1,
-                );
-
-                if (FirebaseService.isInitialized) {
-                  await FirebaseFirestore.instance
-                      .collection('trips')
-                      .doc(tripId)
-                      .collection('itinerary')
-                      .doc(newItem.id)
-                      .set(newItem.toMap());
-                } else {
-                  setState(() => _items.add(newItem));
-                }
-
-                await AnalyticsService.logItineraryItemAdded(tripId);
-                if (ctx.mounted) Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Add Activity'),
-          ),
-        ],
       ),
     );
   }
@@ -253,6 +286,18 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? AppErrorState(
+                      title: 'Could not load itinerary',
+                      message: _errorMessage!,
+                      onRetry: () {
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = null;
+                        });
+                        _listenToItinerary();
+                      },
+                    )
                   : dayItems.isEmpty
                   ? AppEmptyState(
                       icon: Icons.event_available_outlined,

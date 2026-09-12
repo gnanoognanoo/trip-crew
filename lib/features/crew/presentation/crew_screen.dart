@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
+import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/crew/models/crew_member.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
@@ -24,6 +26,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
   StreamSubscription? _sub;
   List<CrewMember> _members = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -61,11 +64,18 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                 setState(() {
                   _members = loaded;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (e) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Could not load crew members. Check your connection.';
+                });
+              }
             },
           );
     } else {
@@ -127,6 +137,14 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
   }
 
   void _removeMember(CrewMember member, String tripId) async {
+    final activeTrip = ref.read(activeTripProvider);
+    if (member.isOwner || member.uid == activeTrip?.ownerId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('The trip owner cannot be removed.')),
+      );
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -146,16 +164,23 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
       ),
     );
 
-    if (confirmed == true && FirebaseService.isInitialized) {
-      await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('members')
-          .doc(member.uid)
-          .delete();
-      await FirebaseFirestore.instance.collection('trips').doc(tripId).update({
-        'memberCount': FieldValue.increment(-1),
-      });
+    if (confirmed == true) {
+      try {
+        await ref
+            .read(tripsProvider.notifier)
+            .removeMember(tripId: tripId, memberUid: member.uid);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${member.displayName} removed.')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to remove member: $e')),
+          );
+        }
+      }
     }
   }
 
@@ -164,7 +189,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
     final theme = Theme.of(context);
     final activeTrip = ref.watch(activeTripProvider);
     final currentUser = ref.watch(authProvider).user;
-    final inviteCode = activeTrip?.inviteCode ?? 'TRIP-DEMO';
+    final inviteCode = activeTrip?.inviteCode ?? '';
     final isCurrentOwner = activeTrip?.ownerId == currentUser?.uid;
 
     if (activeTrip == null) {
@@ -184,8 +209,9 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
       ),
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Top Trip Summary & Invite Action
+            // Header Stats Card
             Padding(
               padding: const EdgeInsets.all(AppConstants.spaceLg),
               child: Card(
@@ -193,12 +219,18 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                   padding: const EdgeInsets.all(AppConstants.spaceMd),
                   child: Row(
                     children: [
-                      CircleAvatar(
-                        radius: 24,
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                        child: Icon(
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: const Color(
+                            0xFF10B981,
+                          ).withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
                           Icons.groups_rounded,
-                          color: theme.colorScheme.primary,
+                          color: Color(0xFF10B981),
+                          size: 24,
                         ),
                       ),
                       const SizedBox(width: AppConstants.spaceMd),
@@ -207,27 +239,23 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              activeTrip.name,
+                              '${_members.length} Crew Active',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             Text(
-                              '${_members.length} ${_members.length == 1 ? "member" : "members"}',
-                              style: TextStyle(
+                              'All members have shared access',
+                              style: theme.textTheme.bodySmall?.copyWith(
                                 color: theme.colorScheme.onSurfaceVariant,
-                                fontSize: 13,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      FilledButton.tonalIcon(
+                      FilledButton.icon(
                         onPressed: () => _showQrDialog(inviteCode),
-                        icon: const Icon(
-                          Icons.person_add_alt_1_rounded,
-                          size: 16,
-                        ),
+                        icon: const Icon(Icons.person_add_rounded, size: 16),
                         label: const Text('Invite'),
                       ),
                     ],
@@ -240,6 +268,18 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? AppErrorState(
+                      title: 'Could not load crew members',
+                      message: _errorMessage!,
+                      onRetry: () {
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = null;
+                        });
+                        _listenToCrew();
+                      },
+                    )
                   : _members.isEmpty
                   ? const AppEmptyState(
                       icon: Icons.group_off_outlined,
@@ -352,8 +392,10 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                                     ),
                                   ),
                                 ),
-                              // Owner can remove member (cannot remove self)
-                              if (isCurrentOwner && !member.isOwner)
+                              // Owner can remove member (cannot remove self or trip owner)
+                              if (isCurrentOwner &&
+                                  !member.isOwner &&
+                                  member.uid != activeTrip.ownerId)
                                 IconButton(
                                   icon: const Icon(
                                     Icons.remove_circle_outline,
@@ -391,6 +433,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                         icon: Icons.pin_outlined,
                         onTap: () {
                           Clipboard.setData(ClipboardData(text: inviteCode));
+                          AnalyticsService.logInviteShared(activeTrip.id);
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(content: Text('Code $inviteCode copied!')),
                           );
@@ -407,6 +450,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                               text: 'https://tripcrew.app/join/$inviteCode',
                             ),
                           );
+                          AnalyticsService.logInviteShared(activeTrip.id);
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Invite link copied!'),
@@ -419,7 +463,10 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                         context,
                         title: 'QR Code',
                         icon: Icons.qr_code_rounded,
-                        onTap: () => _showQrDialog(inviteCode),
+                        onTap: () {
+                          AnalyticsService.logInviteShared(activeTrip.id);
+                          _showQrDialog(inviteCode);
+                        },
                       ),
                     ],
                   ),

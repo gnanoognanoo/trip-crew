@@ -7,6 +7,7 @@ import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
+import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/checklist/models/checklist_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -23,6 +24,7 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
   StreamSubscription? _sub;
   List<ChecklistItem> _items = [];
   bool _isLoading = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -53,11 +55,18 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
                 setState(() {
                   _items = loaded;
                   _isLoading = false;
+                  _errorMessage = null;
                 });
               }
             },
-            onError: (_) {
-              if (mounted) setState(() => _isLoading = false);
+            onError: (e) {
+              if (mounted) {
+                setState(() {
+                  _isLoading = false;
+                  _errorMessage =
+                      'Could not load checklist. Check your connection.';
+                });
+              }
             },
           );
     } else {
@@ -76,6 +85,7 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
     final titleCtrl = TextEditingController();
     String category = 'Clothes';
     String? assigned;
+    bool isSubmitting = false;
 
     showDialog(
       context: context,
@@ -134,35 +144,56 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
             FilledButton(
-              onPressed: () async {
-                if (titleCtrl.text.trim().isNotEmpty) {
-                  final newItem = ChecklistItem(
-                    id: 'c_${DateTime.now().millisecondsSinceEpoch}',
-                    title: titleCtrl.text.trim(),
-                    category: category,
-                    assignedToMemberName: assigned,
-                    isShared: assigned == null,
-                  );
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (titleCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        final newItem = ChecklistItem(
+                          id: 'c_${DateTime.now().millisecondsSinceEpoch}',
+                          title: titleCtrl.text.trim(),
+                          category: category,
+                          assignedToMemberName: assigned,
+                          isShared: assigned == null,
+                        );
 
-                  if (FirebaseService.isInitialized) {
-                    await FirebaseFirestore.instance
-                        .collection('trips')
-                        .doc(tripId)
-                        .collection('checklist')
-                        .doc(newItem.id)
-                        .set(newItem.toMap());
-                  } else {
-                    setState(() => _items.add(newItem));
-                  }
+                        if (FirebaseService.isInitialized) {
+                          await FirebaseFirestore.instance
+                              .collection('trips')
+                              .doc(tripId)
+                              .collection('checklist')
+                              .doc(newItem.id)
+                              .set(newItem.toMap());
+                        } else {
+                          setState(() => _items.add(newItem));
+                        }
 
-                  if (ctx.mounted) Navigator.pop(ctx);
-                }
-              },
-              child: const Text('Add'),
+                        if (ctx.mounted) Navigator.pop(ctx);
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Failed to add item. Check connection.',
+                              ),
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Add'),
             ),
           ],
         ),
@@ -246,6 +277,18 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? AppErrorState(
+                      title: 'Could not load checklist',
+                      message: _errorMessage!,
+                      onRetry: () {
+                        setState(() {
+                          _isLoading = true;
+                          _errorMessage = null;
+                        });
+                        _listenToChecklist();
+                      },
+                    )
                   : _items.isEmpty
                   ? AppEmptyState(
                       icon: Icons.checklist_rtl_rounded,

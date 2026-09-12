@@ -3,7 +3,12 @@ class AppConstants {
 
   // Branding
   static const String appName = 'TripCrew';
+  static const String appBetaName = 'TripCrew Beta';
   static const String appTagline = 'Plan • Travel • Share • Belong';
+  static const String appVersion = '0.1.0-beta';
+
+  // Crew Constraints
+  static const int maxCrewMembers = 25;
 
   // Spacing Tokens
   static const double space2xs = 2.0;

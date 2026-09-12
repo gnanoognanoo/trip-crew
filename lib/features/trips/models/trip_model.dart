@@ -91,7 +91,7 @@ class TripModel {
       tripType: map['tripType'] as String? ?? 'Road Trip',
       budget: (map['budget'] as num?)?.toDouble() ?? 20000.0,
       currency: map['currency'] as String? ?? 'INR (₹)',
-      inviteCode: map['inviteCode'] as String? ?? 'TRIP-DEMO',
+      inviteCode: map['inviteCode'] as String? ?? '',
       status: map['status'] as String? ?? 'upcoming',
       memberCount: (map['memberCount'] as num?)?.toInt() ?? 1,
       totalSpendingPaise: (map['totalSpendingPaise'] as num?)?.toInt() ?? 0,

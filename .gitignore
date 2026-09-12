@@ -4,6 +4,7 @@
 *.pyc
 *.swp
 .DS_Store
+Thumbs.db
 .atom/
 .build/
 .buildlog/
@@ -12,41 +13,57 @@
 .swiftpm/
 migrate_working_dir/
 
-# IntelliJ related
+# IDE & Editor files
 *.iml
 *.ipr
 *.iws
 .idea/
+.vscode/
 
-# Flutter/Dart/Pub related
+# Flutter / Dart / Pub related
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.packages
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
+build/
 /build/
+coverage/
 /coverage/
 
-# Symbolication related
-app.*.symbols
-
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
+# Android specific
+android/.gradle/
+android/local.properties
 /android/app/debug
 /android/app/profile
 /android/app/release
 
-# Security and Secrets
-*.env
-*.env.*
+# iOS specific
+ios/Pods/
+ios/.symlinks/
+
+# Node.js dependencies
+node_modules/
+server/node_modules/
+functions/node_modules/
+
+# Cloudflare temporary tunnels
+.cloudflared/
+
+# Security, Keystores and Secrets
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+*.tmp
 *.keystore
 *.jks
+key.properties
 *service-account*.json
 firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*
-functions/node_modules/
-node_modules/

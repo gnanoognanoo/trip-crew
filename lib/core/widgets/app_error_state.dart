@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 
-/// Reusable error presentation widget ensuring no raw exceptions are shown to users.
+/// Reusable error state view with user-friendly message, warning icon, and retry CTA.
+/// Prevents raw exceptions, stack traces, and infinite spinners from surfacing to end users.
 class AppErrorState extends StatelessWidget {
   final String title;
   final String message;
@@ -10,7 +11,7 @@ class AppErrorState extends StatelessWidget {
 
   const AppErrorState({
     super.key,
-    this.title = 'Something went wrong',
+    this.title = 'Unable to Load Data',
     required this.message,
     this.onRetry,
     this.retryLabel = 'Try Again',
@@ -48,7 +49,7 @@ class AppErrorState extends StatelessWidget {
               title,
               textAlign: TextAlign.center,
               style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 color: theme.colorScheme.onSurface,
               ),
             ),

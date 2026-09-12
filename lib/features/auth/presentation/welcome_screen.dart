@@ -50,13 +50,38 @@ class WelcomeScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: AppConstants.spaceLg),
-                  Text(
-                    AppConstants.appName,
-                    style: theme.textTheme.displaySmall?.copyWith(
-                      fontWeight: FontWeight.w900,
-                      color: Colors.white,
-                      letterSpacing: -0.5,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        AppConstants.appName,
+                        style: theme.textTheme.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w900,
+                          color: Colors.white,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Text(
+                          'BETA',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: AppConstants.spaceXs),
                   Text(

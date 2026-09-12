@@ -199,6 +199,14 @@ class TripWorkspaceScreen extends ConsumerWidget {
             ),
             _buildModuleItem(
               context,
+              title: 'TripCrew Pay',
+              subtitle: 'Shared Trip Pot • Contribute & pay together',
+              icon: Icons.savings_rounded,
+              color: const Color(0xFF10B981),
+              onTap: () => context.push('/trip-pay'),
+            ),
+            _buildModuleItem(
+              context,
               title: 'Shared Expenses & Settlements',
               subtitle: 'Track spending and auto-minimize debt',
               icon: Icons.account_balance_wallet_rounded,
@@ -215,9 +223,9 @@ class TripWorkspaceScreen extends ConsumerWidget {
             ),
             _buildModuleItem(
               context,
-              title: 'Live Crew Map',
-              subtitle: 'Opt-in member location radar & meeting point',
-              icon: Icons.map_rounded,
+              title: 'Live Crew Location',
+              subtitle: 'Realtime crew radar, proximity & regrouping',
+              icon: Icons.radar_rounded,
               color: const Color(0xFF10B981),
               onTap: () => context.push('/live-location'),
             ),
@@ -236,6 +244,14 @@ class TripWorkspaceScreen extends ConsumerWidget {
               icon: Icons.photo_library_rounded,
               color: const Color(0xFF8B5CF6),
               onTap: () => context.push('/memories'),
+            ),
+            _buildModuleItem(
+              context,
+              title: 'Map — Coming Soon',
+              subtitle: 'Routes, places & recommendations',
+              icon: Icons.map_rounded,
+              color: const Color(0xFF3B82F6),
+              onTap: () => context.push('/map'),
             ),
             _buildModuleItem(
               context,

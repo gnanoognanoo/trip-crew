@@ -135,6 +135,7 @@ class AuthNotifier extends Notifier<AuthState> {
             credential.user!.email ?? email,
             credential.user!.displayName,
           );
+          await AnalyticsService.logLogin();
           return true;
         }
       } else {
@@ -147,6 +148,7 @@ class AuthNotifier extends Notifier<AuthState> {
           createdAt: DateTime.now(),
           updatedAt: DateTime.now(),
         );
+        await AnalyticsService.logLogin();
         state = AuthState(user: profile, isLoading: false);
         return true;
       }
@@ -260,6 +262,27 @@ class AuthNotifier extends Notifier<AuthState> {
   Future<void> sendPasswordReset(String email) async {
     if (FirebaseService.isInitialized) {
       await FirebaseAuth.instance.sendPasswordResetEmail(email: email.trim());
+    }
+  }
+
+  Future<void> updateProfilePhoto(String photoUrl) async {
+    if (state.user == null) return;
+    final updated = state.user!.copyWith(photoUrl: photoUrl);
+    state = state.copyWith(user: updated);
+
+    if (FirebaseService.isInitialized) {
+      try {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(updated.uid)
+            .update({
+              'photoUrl': photoUrl,
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+        await FirebaseAuth.instance.currentUser?.updatePhotoURL(photoUrl);
+      } catch (_) {
+        // Silently preserve local state if network fails
+      }
     }
   }
 

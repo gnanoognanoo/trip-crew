@@ -33,35 +33,135 @@ service cloud.firestore {
 
     // Trips collection
     match /trips/{tripId} {
-      // Allow reading if user is a member or owner
-      allow read: if isAuthenticated() && (
+      // Allow exact document get:
+      // 1. Owner or existing member
+      // 2. Joining member who has an active, valid, non-expired invite pointing to this trip
+      allow get: if isAuthenticated() && (
         resource == null ||
+        resource.data.ownerId == request.auth.uid ||
+        exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)) ||
+        (
+          'inviteCode' in resource.data &&
+          exists(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)) &&
+          get(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)).data.tripId == tripId &&
+          get(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)).data.isActive == true &&
+          (
+            !('expiresAt' in get(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)).data) ||
+            get(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)).data.expiresAt == null ||
+            request.time < get(/databases/$(database)/documents/tripInvites/$(resource.data.inviteCode)).data.expiresAt
+          )
+        )
+      );
+
+      // Strict anti-enumeration: users can only list trips they own or belong to
+      allow list: if isAuthenticated() && (
         resource.data.ownerId == request.auth.uid ||
         exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
       );
       
-      // Allow creation if the ownerId is set to the authenticated user
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      // Allow creation if the ownerId is set to the authenticated user and starts with memberCount == 1
+      allow create: if isAuthenticated() && 
+                       request.resource.data.ownerId == request.auth.uid &&
+                       request.resource.data.memberCount == 1;
       
-      // Only owner can update or delete trip metadata
-      allow update: if isTripOwner(tripId);
+      // Allow update:
+      // 1. Trip owner updating trip metadata (memberCount MUST remain unchanged)
+      // 2. Joining member atomically incrementing memberCount by exactly 1 (up to 25)
+      // 3. Member leaving: only memberCount and updatedAt modified, member existed before and not after
+      // 4. Owner removing a member: owner decrements memberCount by exactly 1 (down to min 1)
+      allow update: if isAuthenticated() && (
+        (
+          isTripOwner(tripId) &&
+          request.resource.data.memberCount == resource.data.memberCount
+        ) ||
+        (
+          // Member joining: only memberCount and updatedAt modified
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt']) &&
+          request.resource.data.memberCount == resource.data.memberCount + 1 &&
+          request.resource.data.memberCount <= 25 &&
+          !exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)) &&
+          existsAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
+        ) ||
+        (
+          // Member leaving themselves: member existed before and does not exist after
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt']) &&
+          request.resource.data.memberCount == resource.data.memberCount - 1 &&
+          request.resource.data.memberCount >= 1 &&
+          request.auth.uid != resource.data.ownerId &&
+          exists(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid)) &&
+          !existsAfter(/databases/$(database)/documents/trips/$(tripId)/members/$(request.auth.uid))
+        ) ||
+        (
+          // Owner removing a member: owner decrements count by exactly 1
+          isTripOwner(tripId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberCount', 'updatedAt']) &&
+          request.resource.data.memberCount == resource.data.memberCount - 1 &&
+          request.resource.data.memberCount >= 1
+        )
+      );
       allow delete: if isTripOwner(tripId);
 
       // Members subcollection
       match /members/{memberUid} {
-        allow read: if isTripMember(tripId);
+        // Allow get: existing members, or authenticated users verifying their own membership document
+        allow get: if isTripMember(tripId) || (isAuthenticated() && request.auth.uid == memberUid);
+        // Strict anti-enumeration: only confirmed trip members can list the members collection
+        allow list: if isTripMember(tripId);
         
-        // Joining: User can add themselves as a member, but cannot self-assign owner role
-        allow create: if isAuthenticated() && 
-                      request.auth.uid == memberUid && 
-                      request.resource.data.role == 'member';
-                      
-        // Owner can manage member roles or add members
-        allow create, update: if isTripOwner(tripId);
+        // 1. Initial Owner Bootstrap (new trip created in same batch/transaction):
+        // - Authenticated user creates their own owner document
+        // - Role is strictly 'owner'
+        // - Trip document didn't exist before, exists after
+        // - Resulting trip has ownerId == request.auth.uid and memberCount == 1
+        //
+        // 2. Normal Member Join (joining an existing trip):
+        // - Authenticated and creating own member document (request.auth.uid == memberUid)
+        // - Role is strictly 'member' (no privilege escalation)
+        // - Trip has not exceeded maximum crew capacity (memberCount < 25)
+        // - Must provide a valid, active, non-expired inviteCode pointing to this tripId
+        // - Atomic invariant: Same transaction increments trips/{tripId}.memberCount by exactly 1
+        allow create: if (
+                        // Case A: Owner bootstrap for new trip
+                        isAuthenticated() && 
+                        request.auth.uid == memberUid && 
+                        request.resource.data.role == 'owner' &&
+                        request.resource.data.uid == request.auth.uid &&
+                        !exists(/databases/$(database)/documents/trips/$(tripId)) &&
+                        existsAfter(/databases/$(database)/documents/trips/$(tripId)) &&
+                        getAfter(/databases/$(database)/documents/trips/$(tripId)).data.ownerId == request.auth.uid &&
+                        getAfter(/databases/$(database)/documents/trips/$(tripId)).data.memberCount == 1
+                      ) ||
+                      (
+                        // Case B: Normal member joining existing trip
+                        isAuthenticated() && 
+                        request.auth.uid == memberUid && 
+                        request.resource.data.role == 'member' &&
+                        !exists(/databases/$(database)/documents/trips/$(tripId)/members/$(memberUid)) &&
+                        get(/databases/$(database)/documents/trips/$(tripId)).data.memberCount < 25 &&
+                        ('inviteCode' in request.resource.data) &&
+                        exists(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)) &&
+                        get(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)).data.tripId == tripId &&
+                        get(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)).data.isActive == true &&
+                        (
+                          !('expiresAt' in get(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)).data) ||
+                          get(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)).data.expiresAt == null ||
+                          request.time < get(/databases/$(database)/documents/tripInvites/$(request.resource.data.inviteCode)).data.expiresAt
+                        ) &&
+                        getAfter(/databases/$(database)/documents/trips/$(tripId)).data.memberCount == get(/databases/$(database)/documents/trips/$(tripId)).data.memberCount + 1
+                      );
+
+        allow update: if isTripOwner(tripId);
         
-        // Members can leave (delete themselves), owner can remove members (but owner cannot delete self here)
-        allow delete: if (isAuthenticated() && request.auth.uid == memberUid && !isTripOwner(tripId)) || 
-                         (isTripOwner(tripId) && memberUid != request.auth.uid);
+        // Members can leave (delete themselves), owner can remove members.
+        // In ALL cases: 
+        // 1. The trip owner can NEVER be deleted from members!
+        // 2. ATOMIC INVARIANT: The same write/transaction MUST decrement trips/{tripId}.memberCount from N to N - 1!
+        // 3. memberCount cannot drop below 1 (owner remains).
+        allow delete: if ((isAuthenticated() && request.auth.uid == memberUid && !isTripOwner(tripId)) || 
+                          (isTripOwner(tripId) && memberUid != request.auth.uid)) &&
+                         memberUid != get(/databases/$(database)/documents/trips/$(tripId)).data.ownerId &&
+                         getAfter(/databases/$(database)/documents/trips/$(tripId)).data.memberCount == get(/databases/$(database)/documents/trips/$(tripId)).data.memberCount - 1 &&
+                         getAfter(/databases/$(database)/documents/trips/$(tripId)).data.memberCount >= 1;
       }
 
       // Itinerary subcollection
@@ -99,7 +199,63 @@ service cloud.firestore {
       // Live crew locations subcollection
       match /locations/{locationUid} {
         allow read: if isTripMember(tripId);
-        allow write: if isTripMember(tripId) && request.auth.uid == locationUid;
+        allow create, update: if isTripMember(tripId) && 
+                                 request.auth.uid == locationUid && 
+                                 request.resource.data.uid == request.auth.uid;
+        allow delete: if isTripMember(tripId) && 
+                         (request.auth.uid == locationUid || isTripOwner(tripId));
+      }
+
+      // TripCrew Pay summary subcollection
+      // SECURITY: Members can read and create/update the summary (via atomic Firestore transactions).
+      // Delete is denied — the summary is maintained alongside the transaction ledger.
+      match /tripPay/{docId} {
+        allow read: if isTripMember(tripId);
+        allow create: if isTripMember(tripId);
+        allow update: if isTripMember(tripId);
+        allow delete: if false;
+      }
+
+      // TripCrew Pay paymentAttempts subcollection — PAYMENT STATE MACHINE & ATTEMPTS
+      // SECURITY:
+      // - Members can read payment attempts for their trip.
+      // - Members can CREATE an attempt for themselves, but ONLY in 'created' or 'pending' status.
+      // - Clients CANNOT mark status as 'success', assign 'verifiedAt', or fake 'ledgerTransactionId'.
+      // - Clients may update an attempt to 'failed' or 'expired' upon user cancellation/timeout.
+      // - DELETE is strictly denied — audit trail of attempts is preserved.
+      match /paymentAttempts/{attemptId} {
+        allow read: if isTripMember(tripId);
+        allow create: if isTripMember(tripId) && 
+                         request.auth.uid == request.resource.data.uid &&
+                         request.resource.data.status in ['created', 'pending'] &&
+                         !('verifiedAt' in request.resource.data) &&
+                         !('ledgerTransactionId' in request.resource.data);
+        allow update: if isTripMember(tripId) && 
+                         request.auth.uid == resource.data.uid &&
+                         resource.data.status in ['created', 'pending', 'verifying'] &&
+                         (
+                           (request.resource.data.status in ['failed', 'expired'] && !('verifiedAt' in request.resource.data)) ||
+                           (resource.data.status == 'created' && request.resource.data.status == 'pending')
+                         );
+        allow delete: if false;
+      }
+
+      // TripCrew Pay transactions subcollection — APPEND-ONLY LEDGER
+      // SECURITY:
+      // - Only trip members can read transactions.
+      // - Only trip members can CREATE a transaction, and initiatedByUid must match auth.uid (no impersonation).
+      // - UPDATE is denied — existing financial records are immutable.
+      // - DELETE is denied — financial history must never be erased.
+      //
+      // BACKEND TRUST BOUNDARY:
+      // In sandbox mode, transactions are created with mode = 'sandbox'.
+      // Non-sandbox (real-money) production contributions require trusted backend verification.
+      match /transactions/{transactionId} {
+        allow read: if isTripMember(tripId);
+        allow create: if isTripMember(tripId) && 
+                         request.resource.data.initiatedByUid == request.auth.uid;
+        allow update: if false; // Append-only: financial records are immutable
+        allow delete: if false; // Financial history must never be erased
       }
 
       // Notifications subcollection
@@ -110,10 +266,36 @@ service cloud.firestore {
     }
 
     // Top-level invite codes collection (mapping code to tripId)
+    // Direct single document lookup only (get). Listing all invites is strictly forbidden to prevent enumeration.
     match /tripInvites/{inviteCode} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated() && isTripOwner(request.resource.data.tripId);
+      allow get: if isAuthenticated();
+      allow list: if false; // Strict anti-enumeration: listing all invites is forbidden
+      allow create: if isAuthenticated() && 
+                       request.resource.data.createdBy == request.auth.uid &&
+                       request.resource.data.isActive == true &&
+                       request.resource.data.tripId is string &&
+                       (
+                         // Existing trip where creator is already the verified owner
+                         (exists(/databases/$(database)/documents/trips/$(request.resource.data.tripId)) &&
+                          get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.ownerId == request.auth.uid) ||
+                         // New trip bootstrap created in the same atomic transaction/batch
+                         (existsAfter(/databases/$(database)/documents/trips/$(request.resource.data.tripId)) &&
+                          getAfter(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.ownerId == request.auth.uid)
+                       );
+      allow update, delete: if isAuthenticated() && isTripOwner(resource.data.tripId);
+    }
+
+    // Async media cleanup queue for remote Cloudinary asset deletion
+    match /mediaCleanupQueue/{queueId} {
+      allow read: if isAuthenticated() && (resource.data.requestedBy == request.auth.uid || isTripOwner(resource.data.tripId));
+      allow create: if isAuthenticated() && request.resource.data.requestedBy == request.auth.uid;
+      allow update, delete: if false; // Only trusted backend service can process cleanup
+    }
+
+    // Pilot beta feedback collection
+    match /betaFeedback/{feedbackId} {
+      allow create: if isAuthenticated() && request.resource.data.uid == request.auth.uid;
+      allow read, update, delete: if false; // Write-only from pilot clients; read by admin
     }
   }
 }

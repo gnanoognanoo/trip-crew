@@ -15,7 +15,9 @@ class TripRecapScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final activeTrip = ref.watch(activeTripProvider);
 
-    AnalyticsService.logRecapViewed(activeTrip?.id ?? 'trip_goa_01');
+    if (activeTrip != null) {
+      AnalyticsService.logRecapViewed(activeTrip.id);
+    }
 
     return Scaffold(
       appBar: AppBar(
