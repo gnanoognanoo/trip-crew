@@ -102,6 +102,9 @@ class SandboxPaymentProvider implements PaymentProvider {
     required String providerReference,
     required int expectedAmountPaise,
     String expectedCurrency = 'INR',
+    String? tripId,
+    String? initiatedByName,
+    String? paymentAttemptId,
   }) async {
     if (simulatedDelay > Duration.zero) {
       await Future.delayed(simulatedDelay);

@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -459,27 +460,43 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   Future<void> _handlePaymentSuccess(PaymentSuccessResponse response) async {
     final paymentId = response.paymentId ?? '';
     final signature = response.signature ?? '';
+    final user = ref.read(authProvider).user;
+
+    final realAttemptId = widget.intent.metadata['paymentAttemptId'] as String? ??
+        widget.intent.metadata['payment_attempt_id'] as String? ??
+        widget.intent.id;
+    final razorpayOrderId = widget.intent.id;
+
+    developer.log(
+      '[PAYMENT_ID_FIX] Razorpay success callback | paymentAttemptId=$realAttemptId | razorpayOrderId=$razorpayOrderId | paymentId=$paymentId | tripId=${widget.tripId} | userId=${user?.uid}',
+      name: 'AddContributionScreen',
+    );
 
     if (!mounted) return;
     setState(() => _state = _SheetState.verifyingPayment);
 
     final notifier = ref.read(tripPayProvider.notifier);
-    final providerReference = '$paymentId|$signature|${widget.intent.id}';
+    final providerReference = '$paymentId|$signature|$razorpayOrderId';
 
     final success = await notifier.verifyAndFinalizeContribution(
       tripId: widget.tripId,
-      paymentAttemptId: widget.intent.id,
+      paymentAttemptId: realAttemptId,
       providerReference: providerReference,
     );
 
     if (!mounted) return;
+
+    final notifierErr = ref.read(tripPayProvider).error;
+    developer.log(
+      '[PAYMENT_ID_FIX] Flutter state after verification | success=$success | error=$notifierErr',
+      name: 'AddContributionScreen',
+    );
 
     if (success) {
       setState(() => _state = _SheetState.success);
       await Future.delayed(const Duration(milliseconds: 900));
       if (mounted) widget.onSuccess();
     } else {
-      final notifierErr = ref.read(tripPayProvider).error;
       setState(() {
         _state = _SheetState.failed;
         _errorMessage = notifierErr ?? 'Payment finalization failed. Trip Pot unchanged. Please retry.';

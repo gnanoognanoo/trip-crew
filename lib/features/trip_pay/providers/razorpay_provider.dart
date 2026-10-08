@@ -1,4 +1,5 @@
  import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:razorpay_flutter/razorpay_flutter.dart';
@@ -315,6 +316,9 @@ class RazorpayPaymentProvider implements PaymentProvider {
     required String providerReference,
     required int expectedAmountPaise,
     String expectedCurrency = 'INR',
+    String? tripId,
+    String? initiatedByName,
+    String? paymentAttemptId,
   }) async {
     if (!isConfigured) {
       return PaymentVerification(
@@ -358,13 +362,29 @@ class RazorpayPaymentProvider implements PaymentProvider {
                 )
               : 'simulated_sig');
 
+      final realAttemptId = paymentAttemptId ?? paymentIntentId;
+      final realOrderId = paymentIntentId;
+
       final requestPayload = jsonEncode({
-        'razorpayOrderId': paymentIntentId,
+        'razorpay_order_id': realOrderId,
+        'razorpay_payment_id': targetPaymentId,
+        'razorpay_signature': targetSignature,
+        'razorpayOrderId': realOrderId,
         'razorpayPaymentId': targetPaymentId,
         'razorpaySignature': targetSignature,
+        'paymentAttemptId': realAttemptId,
+        'payment_attempt_id': realAttemptId,
         'expectedAmountPaise': expectedAmountPaise,
         'expectedCurrency': expectedCurrency,
+        if (tripId != null) 'tripId': tripId,
+        if (tripId != null) 'trip_id': tripId,
+        if (initiatedByName != null) 'initiatedByName': initiatedByName,
       });
+
+      developer.log(
+        '[PAYMENT_ID_FIX] RazorpayProvider.verifyPayment | paymentAttemptId=$realAttemptId | razorpayOrderId=$realOrderId | paymentId=$targetPaymentId | amountPaise=$expectedAmountPaise | verificationUrl=$verificationUrl',
+        name: 'RazorpayProvider',
+      );
 
       bool verifiedViaProxy = false;
 
@@ -381,18 +401,61 @@ class RazorpayPaymentProvider implements PaymentProvider {
             headers['Authorization'] = 'Bearer ${SupabaseService.defaultAnonKey}';
           }
 
+          developer.log(
+            '[REAL_PAYMENT_TRACE] 10. Flutter verification request URL = ${url.toString()}',
+            name: 'RazorpayProvider',
+          );
+
           final response = await _client.post(
             url,
             headers: headers,
             body: requestPayload,
           );
 
+          developer.log(
+            '[REAL_PAYMENT_TRACE] 11. HTTP status returned by Edge Function = ${response.statusCode}',
+            name: 'RazorpayProvider',
+          );
+          developer.log(
+            '[REAL_PAYMENT_TRACE] 12. Edge Function response body = ${response.body}',
+            name: 'RazorpayProvider',
+          );
+
           if (response.statusCode == 200) {
             providerData = jsonDecode(response.body) as Map<String, dynamic>;
             verifiedViaProxy = true;
+
+            developer.log(
+              '[REAL_PAYMENT_TRACE] 13. isVerified = ${providerData["isVerified"]}',
+              name: 'RazorpayProvider',
+            );
+            developer.log(
+              '[REAL_PAYMENT_TRACE] returned status = ${providerData["status"]}',
+              name: 'RazorpayProvider',
+            );
+            developer.log(
+              '[REAL_PAYMENT_TRACE] 18. transactions row creation / transactionId = ${providerData["transactionId"]}',
+              name: 'RazorpayProvider',
+            );
+          } else {
+            final errBody = jsonDecode(response.body) as Map<String, dynamic>?;
+            return PaymentVerification(
+              isVerified: false,
+              providerReference: providerReference,
+              paymentIntentId: paymentIntentId,
+              status: PaymentStatus.failed,
+              amountPaise: 0,
+              currency: expectedCurrency,
+              verifiedAt: DateTime.now(),
+              failureReason: errBody?['failureReason'] as String? ??
+                  'Verification Edge Function returned ${response.statusCode}',
+            );
           }
-        } catch (_) {
-          // Edge function attempt failed or offline, fall back to Railway backendBaseUrl
+        } catch (e) {
+          developer.log(
+            '[REAL_PAYMENT_TRACE] Edge Function exception = $e',
+            name: 'RazorpayProvider',
+          );
         }
       }
 

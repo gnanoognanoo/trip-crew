@@ -35,6 +35,9 @@ abstract class PaymentProvider {
     required String providerReference,
     required int expectedAmountPaise,
     String expectedCurrency = 'INR',
+    String? tripId,
+    String? initiatedByName,
+    String? paymentAttemptId,
   });
 
   /// Processes an external webhook payload with cryptographic signature verification.

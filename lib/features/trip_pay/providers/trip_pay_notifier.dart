@@ -265,7 +265,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
     if (providerType == PaymentProviderType.razorpay) {
       const backendUrl = String.fromEnvironment(
         'TRIPCREW_BACKEND_URL',
-        defaultValue: 'https://trip-creww-production.up.railway.app',
+        defaultValue: '',
       );
       const verifyUrl = String.fromEnvironment(
         'TRIPCREW_VERIFY_URL',
@@ -275,7 +275,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
           '${SupabaseService.defaultUrl.replaceAll(RegExp(r'/$'), '')}/functions/v1/razorpay-verify';
 
       _paymentProvider = RazorpayPaymentProvider(
-        backendBaseUrl: backendUrl.isNotEmpty ? backendUrl : 'https://trip-creww-production.up.railway.app',
+        backendBaseUrl: backendUrl,
         verificationUrl: verifyUrl.isNotEmpty ? verifyUrl : defaultSupabaseVerifyUrl,
       );
     } else {
@@ -309,6 +309,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
 
   Future<void> fetchTripPay(String tripId) async {
     final currentUid = ref.read(authProvider).user?.uid;
+    developer.log('[PAYMENT_RUNTIME_DEBUG] 17. fetchTripPay() call | tripId = $tripId | current UID = $currentUid', name: 'TripPayNotifier');
     developer.log('[TRIPPAY_DEBUG] fetchTripPay START | tripId = $tripId | current user = $currentUid', name: 'TripPayNotifier');
     developer.log('[TRIPPAY_DEBUG] Supabase.isInitialized = ${SupabaseService.isInitialized}', name: 'TripPayNotifier');
 
@@ -409,6 +410,8 @@ class TripPayNotifier extends Notifier<TripPayState> {
         paymentAttempts: attempts,
       );
 
+      developer.log('[REAL_PAYMENT_TRACE] 20. Flutter refresh of Trip Pay / fetchTripPay() result | summary balance = ${summary.availableBalancePaise} | txCount = ${txList.length} | pendingAttemptsCount = ${attempts.where((a) => a.isPending).length}', name: 'TripPayNotifier');
+      developer.log('[REAL_PAYMENT_TRACE] 21. refreshed Trip Pot amount = ${summary.availableBalancePaise}', name: 'TripPayNotifier');
       developer.log('[TRIPPAY_DEBUG] fetchTripPay END | final isLoading = ${state.isLoading} | summary balance = ${summary.availableBalancePaise}', name: 'TripPayNotifier');
     } catch (e) {
       developer.log('[TRIPPAY_DEBUG] fetchTripPay FATAL ERROR = $e', name: 'TripPayNotifier');

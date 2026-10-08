@@ -10,12 +10,12 @@ class SupabaseService {
 
   static const String defaultUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://xyzcompany.supabase.co',
+    defaultValue: 'https://fngfdesajzbidjwihagi.supabase.co',
   );
 
   static const String defaultAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.dummy_anon_key',
+    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuZ2ZkZXNhanpiaWRqd2loYWdpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA5OTI5NzgsImV4cCI6MjEwNjU2ODk3OH0.a-d3tVx317p8ufkaNo7peiluVmJYi3pG05z9yDp4RNA',
   );
 
   static Future<void> initialize({

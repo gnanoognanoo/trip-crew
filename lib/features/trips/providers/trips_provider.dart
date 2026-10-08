@@ -209,6 +209,11 @@ class TripsNotifier extends Notifier<TripsState> {
     final tripId = 'trip_${DateTime.now().millisecondsSinceEpoch}';
     final uid = user?.uid ?? 'creator';
 
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final String initialStatus = startDate.isAfter(today) ? 'upcoming' : 'active';
+    final bool initialIsActive = initialStatus == 'active';
+
     final newTrip = TripModel(
       id: tripId,
       ownerId: uid,
@@ -221,16 +226,22 @@ class TripsNotifier extends Notifier<TripsState> {
       budget: budget,
       currency: currency,
       inviteCode: inviteCode,
-      status: 'active',
+      status: initialStatus,
+      isActive: initialIsActive,
       memberCount: 1,
       totalSpendingPaise: 0,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
+    developer.log(
+      '[TRIP_CREATE_DEBUG] createTrip START | uid=$uid | tripId=$tripId | title=${name.trim()} | startDate=$startDate | status=$initialStatus',
+      name: 'TripsNotifier',
+    );
+
     if (SupabaseService.isInitialized) {
       try {
-        await SupabaseService.client.from('trips').insert({
+        final tripsInsertPayload = {
           'id': tripId,
           'title': name.trim(),
           'destination': destination.trim(),
@@ -241,15 +252,41 @@ class TripsNotifier extends Notifier<TripsState> {
           'invite_code': inviteCode,
           'created_at': DateTime.now().toIso8601String(),
           'updated_at': DateTime.now().toIso8601String(),
-        });
+        };
+        developer.log(
+          '[TRIP_CREATE_DEBUG] trips INSERT payload = $tripsInsertPayload',
+          name: 'TripsNotifier',
+        );
 
-        await SupabaseService.client.from('trip_members').insert({
+        final tripsRes = await SupabaseService.client
+            .from('trips')
+            .insert(tripsInsertPayload)
+            .select();
+        developer.log(
+          '[TRIP_CREATE_DEBUG] trips INSERT response = $tripsRes',
+          name: 'TripsNotifier',
+        );
+
+        final memberInsertPayload = {
           'id': 'tm_${DateTime.now().millisecondsSinceEpoch}',
           'trip_id': tripId,
           'user_id': uid,
           'role': 'owner',
           'joined_at': DateTime.now().toIso8601String(),
-        });
+        };
+        developer.log(
+          '[TRIP_CREATE_DEBUG] trip_members INSERT payload = $memberInsertPayload',
+          name: 'TripsNotifier',
+        );
+
+        final memberRes = await SupabaseService.client
+            .from('trip_members')
+            .insert(memberInsertPayload)
+            .select();
+        developer.log(
+          '[TRIP_CREATE_DEBUG] trip_members INSERT response = $memberRes',
+          name: 'TripsNotifier',
+        );
 
         await SupabaseService.client.from('trip_invites').insert({
           'id': 'inv_${DateTime.now().millisecondsSinceEpoch}',
@@ -258,7 +295,13 @@ class TripsNotifier extends Notifier<TripsState> {
           'created_by': uid,
           'created_at': DateTime.now().toIso8601String(),
         });
-      } catch (_) {}
+      } catch (e, stack) {
+        developer.log(
+          '[TRIP_CREATE_DEBUG] Supabase trip creation ERROR = $e',
+          name: 'TripsNotifier',
+          stackTrace: stack,
+        );
+      }
     }
 
     await AnalyticsService.logTripCreated(tripId, tripType);

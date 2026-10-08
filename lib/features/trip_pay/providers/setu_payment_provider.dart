@@ -291,6 +291,9 @@ class SetuPaymentProvider implements PaymentProvider {
     required String providerReference,
     required int expectedAmountPaise,
     String expectedCurrency = 'INR',
+    String? tripId,
+    String? initiatedByName,
+    String? paymentAttemptId,
   }) async {
     if (!isConfigured) {
       return PaymentVerification(

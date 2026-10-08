@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
@@ -56,6 +57,11 @@ class TrustedPaymentService {
             status: existing.status,
             createdAt: existing.createdAt,
             expiresAt: existing.createdAt.add(const Duration(minutes: 15)),
+            metadata: {
+              'paymentAttemptId': existing.id,
+              'payment_attempt_id': existing.id,
+              'orderId': existing.paymentIntentId,
+            },
           );
         }
       } catch (_) {}
@@ -93,7 +99,29 @@ class TrustedPaymentService {
       } catch (_) {}
     }
 
-    return intent;
+    final updatedMetadata = Map<String, dynamic>.from(intent.metadata);
+    updatedMetadata['paymentAttemptId'] = attemptId;
+    updatedMetadata['payment_attempt_id'] = attemptId;
+    updatedMetadata['orderId'] = intent.id;
+
+    return PaymentIntent(
+      id: intent.id,
+      tripId: intent.tripId,
+      uid: intent.uid,
+      amountPaise: intent.amountPaise,
+      platformFeePaise: intent.platformFeePaise,
+      totalChargePaise: intent.totalChargePaise,
+      currency: intent.currency,
+      clientRequestId: intent.clientRequestId,
+      provider: intent.provider,
+      status: intent.status,
+      paymentUrl: intent.paymentUrl,
+      upiIntentUrl: intent.upiIntentUrl,
+      qrCodeData: intent.qrCodeData,
+      createdAt: intent.createdAt,
+      expiresAt: intent.expiresAt,
+      metadata: updatedMetadata,
+    );
   }
 
   /// Step 2: Verifies payment via Railway backend (which executes atomic Supabase RPC finalization).
@@ -154,13 +182,24 @@ class TrustedPaymentService {
         ? attempt.totalChargePaise
         : attempt.amountPaise;
 
-    // Call Railway payment provider verification
-    // Railway HMAC verification + Railway Supabase RPC atomic finalization
+    developer.log(
+      '[PAYMENT_ID_FIX] TrustedPaymentService.verifyAndFinalizeContribution | paymentAttemptId=${attempt.id} | paymentIntentId=${attempt.paymentIntentId} | tripId=$tripId',
+      name: 'TrustedPaymentService',
+    );
+
     final verification = await _paymentProvider.verifyPayment(
       paymentIntentId: attempt.paymentIntentId,
       providerReference: providerReference,
       expectedAmountPaise: expectedTotalPaise,
       expectedCurrency: 'INR',
+      tripId: tripId,
+      initiatedByName: initiatedByName,
+      paymentAttemptId: attempt.id,
+    );
+
+    developer.log(
+      '[PAYMENT_ID_FIX] verification result | isVerified=${verification.isVerified} | status=${verification.status} | failureReason=${verification.failureReason}',
+      name: 'TrustedPaymentService',
     );
 
     if (!verification.isVerified ||

@@ -230,143 +230,167 @@ CREATE OR REPLACE FUNCTION public.finalize_payment_attempt(
   p_trip_id TEXT,
   p_payment_intent_id TEXT,
   p_provider_reference TEXT,
-  p_initiated_by_name TEXT,
-  p_amount_paise BIGINT DEFAULT NULL,
-  p_mode TEXT DEFAULT 'sandbox'
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
+  p_initiated_by_name TEXT DEFAULT 'Member',
+  p_amount_paise BIGINT DEFAULT 0,
+  p_mode TEXT DEFAULT 'live',
+  p_payment_attempt_id TEXT DEFAULT NULL
+) RETURNS JSONB AS $$
 DECLARE
-  v_attempt public.payment_attempts%ROWTYPE;
-  v_summary public.trip_pay_summary%ROWTYPE;
-  v_tx_id TEXT;
-  v_now TIMESTAMPTZ := NOW();
-  v_balance_before BIGINT := 0;
-  v_balance_after BIGINT := 0;
+  v_attempt RECORD;
+  v_attempt_by_id RECORD;
+  v_attempt_by_intent RECORD;
+  v_summary RECORD;
+  v_transaction_id TEXT;
+  v_balance_before BIGINT;
+  v_balance_after BIGINT;
   v_amount BIGINT;
-  v_fee BIGINT;
-  v_existing_tx public.transactions%ROWTYPE;
+  v_user_id TEXT;
+  v_client_req_id TEXT;
 BEGIN
-  -- 1. Idempotency Check: Has provider_reference already been processed?
-  IF p_provider_reference IS NOT NULL AND p_provider_reference <> '' THEN
-    SELECT * INTO v_existing_tx FROM public.transactions WHERE provider_reference = p_provider_reference LIMIT 1;
-    IF FOUND THEN
-      RETURN jsonb_build_object(
-        'success', true,
-        'idempotent', true,
-        'transaction_id', v_existing_tx.id,
-        'amount_paise', v_existing_tx.amount_paise,
-        'status', 'success'
-      );
+  -- 1. Canonical lookup logic:
+  -- Check if p_payment_attempt_id is provided
+  IF p_payment_attempt_id IS NOT NULL AND p_payment_attempt_id <> '' THEN
+    SELECT * INTO v_attempt_by_id FROM payment_attempts
+    WHERE id = p_payment_attempt_id FOR UPDATE;
+  END IF;
+
+  -- Check by p_payment_intent_id
+  IF p_payment_intent_id IS NOT NULL AND p_payment_intent_id <> '' THEN
+    IF p_payment_intent_id LIKE 'att_%' AND v_attempt_by_id.id IS NULL THEN
+      SELECT * INTO v_attempt_by_id FROM payment_attempts
+      WHERE id = p_payment_intent_id FOR UPDATE;
+    ELSE
+      SELECT * INTO v_attempt_by_intent FROM payment_attempts
+      WHERE payment_intent_id = p_payment_intent_id FOR UPDATE;
     END IF;
   END IF;
 
-  -- 2. Locate Payment Attempt by ID or payment_intent_id
-  SELECT * INTO v_attempt FROM public.payment_attempts
-  WHERE id = p_payment_intent_id OR payment_intent_id = p_payment_intent_id
-  LIMIT 1;
-
-  IF NOT FOUND THEN
-    -- Fallback attempt creation if missing
-    v_amount := COALESCE(p_amount_paise, 200);
-    v_fee := ROUND(v_amount * 0.01);
-  ELSE
-    v_amount := v_attempt.amount_paise;
-    v_fee := v_attempt.platform_fee_paise;
+  -- If both are supplied and resolved, require them to point to the SAME row
+  IF v_attempt_by_id.id IS NOT NULL AND v_attempt_by_intent.id IS NOT NULL THEN
+    IF v_attempt_by_id.id <> v_attempt_by_intent.id THEN
+      RETURN jsonb_build_object(
+        'success', false,
+        'error', 'PAYMENT_ATTEMPT_MISMATCH',
+        'message', 'Supplied payment_attempt_id and payment_intent_id resolve to different attempts'
+      );
+    END IF;
+    v_attempt := v_attempt_by_id;
+  ELSIF v_attempt_by_id.id IS NOT NULL THEN
+    v_attempt := v_attempt_by_id;
+  ELSIF v_attempt_by_intent.id IS NOT NULL THEN
+    v_attempt := v_attempt_by_intent;
+  ELSIF p_provider_reference IS NOT NULL AND p_provider_reference <> '' THEN
+    SELECT * INTO v_attempt FROM payment_attempts
+    WHERE provider_reference = p_provider_reference FOR UPDATE;
   END IF;
 
-  -- 3. Lock and fetch Trip Pot Summary for update
-  SELECT * INTO v_summary FROM public.trip_pay_summary
-  WHERE trip_id = p_trip_id FOR UPDATE;
-
-  IF FOUND THEN
-    v_balance_before := COALESCE(v_summary.available_balance_paise, 0);
-  ELSE
-    v_balance_before := 0;
+  -- 2. Strict Check: NO system_user fallback!
+  IF v_attempt.id IS NULL OR v_attempt.id = '' THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'PAYMENT_ATTEMPT_NOT_FOUND',
+      'message', 'No matching payment attempt was found for finalization'
+    );
   END IF;
 
+  -- Verify trip_id
+  IF p_trip_id IS NOT NULL AND p_trip_id <> '' AND v_attempt.trip_id <> p_trip_id THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'TRIP_ID_MISMATCH',
+      'message', 'Payment attempt trip_id does not match supplied trip_id'
+    );
+  END IF;
+
+  -- Verify amount if supplied (>0)
+  IF p_amount_paise IS NOT NULL AND p_amount_paise > 0 AND v_attempt.amount_paise <> p_amount_paise AND v_attempt.total_charge_paise <> p_amount_paise THEN
+    RETURN jsonb_build_object(
+      'success', false,
+      'error', 'AMOUNT_MISMATCH',
+      'message', 'Payment attempt amount does not match supplied amount'
+    );
+  END IF;
+
+  -- 3. Idempotency Check: If already SUCCESS, return early without double adding money
+  IF v_attempt.status = 'SUCCESS' THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'idempotent', true,
+      'message', 'Payment attempt already finalized',
+      'attempt_id', v_attempt.id,
+      'transaction_id', v_attempt.ledger_transaction_id
+    );
+  END IF;
+
+  v_amount := v_attempt.amount_paise;
+  v_user_id := v_attempt.user_id;
+  v_client_req_id := v_attempt.client_request_id;
+
+  -- Update status to SUCCESS
+  UPDATE payment_attempts
+  SET status = 'SUCCESS',
+      provider_reference = COALESCE(p_provider_reference, v_attempt.provider_reference),
+      payment_intent_id = COALESCE(v_attempt.payment_intent_id, CASE WHEN p_payment_intent_id NOT LIKE 'att_%' THEN p_payment_intent_id ELSE NULL END),
+      verified_at = NOW(),
+      updated_at = NOW()
+  WHERE id = v_attempt.id;
+
+  -- 4. Lock/Insert trip_pay_summary
+  INSERT INTO trip_pay_summary (trip_id, total_contributed_paise, total_spent_paise, available_balance_paise, updated_at)
+  VALUES (v_attempt.trip_id, 0, 0, 0, NOW())
+  ON CONFLICT (trip_id) DO NOTHING;
+
+  SELECT * INTO v_summary FROM trip_pay_summary WHERE trip_id = v_attempt.trip_id FOR UPDATE;
+
+  v_balance_before := COALESCE(v_summary.available_balance_paise, 0);
   v_balance_after := v_balance_before + v_amount;
 
-  -- 4. Generate Ledger Transaction ID
-  v_tx_id := 'tx_' || EXTRACT(EPOCH FROM v_now)::BIGINT || '_' || ABS(HASHTEXT(COALESCE(v_attempt.uid, 'user_anon')));
+  -- 5. Create single ledger transaction
+  v_transaction_id := 'tx_' || floor(random()*1000000000)::text;
 
-  -- 5. Insert Ledger Transaction Record
-  INSERT INTO public.transactions (
-    id,
-    trip_id,
-    type,
-    amount_paise,
-    initiated_by_uid,
-    initiated_by_name,
-    category,
-    description,
-    status,
-    created_at,
-    balance_before_paise,
-    balance_after_paise,
-    calculated_platform_fee_paise,
-    mode,
-    client_request_id,
-    provider_reference
+  INSERT INTO transactions (
+    id, trip_id, type, amount_paise, initiated_by_user_id, initiated_by_name,
+    category, description, status, balance_before_paise, balance_after_paise,
+    platform_fee_paise, payment_attempt_id, provider_reference, client_request_id, created_at
   ) VALUES (
-    v_tx_id,
-    p_trip_id,
-    'contribution',
+    v_transaction_id,
+    v_attempt.trip_id,
+    'CONTRIBUTION',
     v_amount,
-    COALESCE(v_attempt.uid, 'uid_user'),
+    v_user_id,
     COALESCE(p_initiated_by_name, 'Member'),
-    'Contribution',
-    COALESCE(p_initiated_by_name, 'Member') || ' added money (UPI)',
-    'sandboxSuccess',
-    v_now,
+    'Trip Pot Contribution',
+    'Razorpay Contribution to Trip Pot',
+    'SUCCESS',
     v_balance_before,
     v_balance_after,
-    v_fee,
-    p_mode,
-    COALESCE(v_attempt.client_request_id, 'cr_' || p_payment_intent_id),
-    p_provider_reference
+    COALESCE(v_attempt.platform_fee_paise, 0),
+    v_attempt.id,
+    COALESCE(p_provider_reference, v_attempt.provider_reference),
+    v_client_req_id,
+    NOW()
   );
 
-  -- 6. Update or Insert Trip Pot Summary
-  INSERT INTO public.trip_pay_summary (
-    trip_id,
-    total_contributed_paise,
-    total_spent_paise,
-    available_balance_paise,
-    updated_at
-  ) VALUES (
-    p_trip_id,
-    COALESCE(v_summary.total_contributed_paise, 0) + v_amount,
-    COALESCE(v_summary.total_spent_paise, 0),
-    v_balance_after,
-    v_now
-  )
-  ON CONFLICT (trip_id) DO UPDATE SET
-    total_contributed_paise = public.trip_pay_summary.total_contributed_paise + v_amount,
-    available_balance_paise = v_balance_after,
-    updated_at = v_now;
+  -- 6. Update trip_pay_summary
+  UPDATE trip_pay_summary
+  SET total_contributed_paise = total_contributed_paise + v_amount,
+      available_balance_paise = available_balance_paise + v_amount,
+      updated_at = NOW()
+  WHERE trip_id = v_attempt.trip_id;
 
-  -- 7. Update Payment Attempt Status
-  IF v_attempt.id IS NOT NULL THEN
-    UPDATE public.payment_attempts SET
-      status = 'success',
-      provider_reference = p_provider_reference,
-      verified_at = v_now,
-      ledger_transaction_id = v_tx_id,
-      updated_at = v_now
-    WHERE id = v_attempt.id;
-  END IF;
+  -- 7. Link ledger transaction ID
+  UPDATE payment_attempts
+  SET ledger_transaction_id = v_transaction_id
+  WHERE id = v_attempt.id;
 
   RETURN jsonb_build_object(
     'success', true,
     'idempotent', false,
-    'transaction_id', v_tx_id,
-    'amount_paise', v_amount,
-    'balance_before_paise', v_balance_before,
-    'balance_after_paise', v_balance_after,
-    'status', 'success'
+    'attempt_id', v_attempt.id,
+    'transaction_id', v_transaction_id,
+    'balance_before', v_balance_before,
+    'balance_after', v_balance_after,
+    'amount_added', v_amount
   );
 END;
-$$;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

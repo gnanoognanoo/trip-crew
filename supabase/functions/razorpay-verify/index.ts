@@ -160,11 +160,21 @@ serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    const razorpayOrderId =
+      body.razorpay_order_id || body.razorpayOrderId || body.order_id || body.orderId || null;
+    const paymentAttemptId =
+      body.payment_attempt_id || body.paymentAttemptId || body.attemptId || null;
+
+    console.log(
+      `[PAYMENT_ID_FIX] Edge Function verification request | paymentAttemptId=${paymentAttemptId} | razorpayOrderId=${razorpayOrderId} | tripId=${tripId} | paymentId=${paymentId}`
+    );
+
     const { data: rpcResult, error: rpcError } = await supabase.rpc(
       'finalize_payment_attempt',
       {
         p_trip_id: tripId,
-        p_payment_intent_id: orderId,
+        p_payment_attempt_id: paymentAttemptId,
+        p_payment_intent_id: razorpayOrderId,
         p_provider_reference: paymentId,
         p_initiated_by_name: initiatedByName,
         p_amount_paise: expectedAmountPaise || 10100,
@@ -173,7 +183,7 @@ serve(async (req: Request) => {
     );
 
     if (rpcError) {
-      console.error('[EDGE SUPABASE RPC ERROR]', rpcError.message);
+      console.error('[PAYMENT_ID_FIX] RPC Error:', rpcError.message);
       return new Response(
         JSON.stringify({
           isVerified: false,
@@ -187,16 +197,40 @@ serve(async (req: Request) => {
       );
     }
 
+    if (!rpcResult || rpcResult.success === false) {
+      const errorMsg =
+        rpcResult?.message ||
+        rpcResult?.error ||
+        'Payment attempt not found or finalization failed';
+      console.error('[PAYMENT_ID_FIX] RPC finalization failed:', errorMsg);
+      return new Response(
+        JSON.stringify({
+          isVerified: false,
+          status: 'failed',
+          failureReason: errorMsg,
+          rpcDetails: rpcResult
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
     const txId = typeof rpcResult === 'object' && rpcResult !== null
       ? rpcResult.transaction_id || rpcResult.id
       : null;
+
+    console.log(
+      `[PAYMENT_ID_FIX] RPC Success | finalizedAttemptId=${rpcResult.attempt_id} | transactionId=${txId} | balanceAfter=${rpcResult.balance_after}`
+    );
 
     // 4. Return success contract
     return new Response(
       JSON.stringify({
         isVerified: true,
         providerReference: paymentId,
-        paymentIntentId: orderId,
+        paymentIntentId: razorpayOrderId,
         status: 'success',
         amountPaid: expectedAmountPaise || 10100,
         amountPaise: expectedAmountPaise || 10100,
