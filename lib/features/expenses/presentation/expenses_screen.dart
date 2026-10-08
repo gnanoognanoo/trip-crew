@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
@@ -38,72 +37,53 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
     _listenToExpensesAndMembers();
   }
 
-  void _listenToExpensesAndMembers() {
+  void _listenToExpensesAndMembers() async {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _expensesSub?.cancel();
-      _membersSub?.cancel();
+    if (SupabaseService.isInitialized) {
+      try {
+        final membersRes = await SupabaseService.client
+            .from('trip_members')
+            .select('user_id, role, profiles(display_name)')
+            .eq('trip_id', activeTrip.id);
 
-      // Listen to members
-      _membersSub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('members')
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final map = <String, String>{};
-              for (final doc in snapshot.docs) {
-                map[doc.id] = doc.data()['displayName'] as String? ?? 'Member';
-              }
-              if (mounted) setState(() => _memberNames = map);
-            },
-            onError: (_) {
-              if (mounted) {
-                setState(() {
-                  _errorMessage =
-                      'Could not sync crew members. Please check connection.';
-                });
-              }
-            },
-          );
+        final map = <String, String>{};
+        for (final m in membersRes) {
+          final uid = m['user_id'] as String;
+          final profile = m['profiles'] as Map<String, dynamic>?;
+          map[uid] = profile?['display_name'] as String? ?? 'Member';
+        }
 
-      // Listen to expenses
-      _expensesSub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('expenses')
-          .orderBy('createdAt', descending: true)
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final loaded = snapshot.docs
-                  .map((doc) => ExpenseModel.fromMap(doc.data(), doc.id))
-                  .toList();
+        final expRes = await SupabaseService.client
+            .from('expenses')
+            .select()
+            .eq('trip_id', activeTrip.id)
+            .order('created_at', ascending: false);
 
-              if (mounted) {
-                setState(() {
-                  _expenses = loaded;
-                  _isLoading = false;
-                  _errorMessage = null;
-                });
-              }
-            },
-            onError: (err) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _errorMessage =
-                      'Could not sync expenses. Please check connection.';
-                });
-              }
-            },
-          );
+        final loaded = expRes
+            .map((e) => ExpenseModel.fromMap(Map<String, dynamic>.from(e), e['id'] as String))
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _memberNames = map;
+            _expenses = loaded;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (err) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Could not sync expenses. Please check connection.';
+          });
+        }
+      }
     } else {
       final user = ref.read(authProvider).user;
       setState(() {
@@ -227,26 +207,19 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                             createdAt: DateTime.now(),
                           );
 
-                          if (FirebaseService.isInitialized) {
-                            final batch = FirebaseFirestore.instance.batch();
-                            final expenseRef = FirebaseFirestore.instance
-                                .collection('trips')
-                                .doc(tripId)
-                                .collection('expenses')
-                                .doc(newExpense.id);
-                            final tripRef = FirebaseFirestore.instance
-                                .collection('trips')
-                                .doc(tripId);
-
-                            batch.set(expenseRef, newExpense.toMap());
-                            batch.update(tripRef, {
-                              'totalSpendingPaise': FieldValue.increment(
-                                amountPaise,
-                              ),
-                              'updatedAt': FieldValue.serverTimestamp(),
+                          if (SupabaseService.isInitialized) {
+                            await SupabaseService.client.from('expenses').insert({
+                              'id': newExpense.id,
+                              'trip_id': tripId,
+                              'title': descCtrl.text.trim(),
+                              'amount_paise': amountPaise,
+                              'paid_by_user_id': paidBy,
+                              'paid_by_name': payerName,
+                              'category': category,
+                              'split_type': 'EQUAL',
+                              'created_at': DateTime.now().toIso8601String(),
                             });
-
-                            await batch.commit();
+                            setState(() => _expenses.insert(0, newExpense));
                           } else {
                             setState(() => _expenses.insert(0, newExpense));
                           }

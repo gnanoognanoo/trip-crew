@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import 'package:tripcrew/core/services/firebase_service.dart';
@@ -195,7 +195,7 @@ class CloudinaryService {
     required String tripId,
     required String uid,
   }) async {
-    if (!FirebaseService.isInitialized) {
+    if (!SupabaseService.isInitialized) {
       if (uid.isEmpty) {
         throw const CloudinaryAuthException(
           'Authentication required to upload trip media.',
@@ -204,43 +204,30 @@ class CloudinaryService {
       return;
     }
 
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) {
-      throw const CloudinaryAuthException(
-        'User must be signed in with Firebase to upload trip memories.',
-      );
-    }
-
-    if (currentUser.uid != uid) {
-      throw const CloudinaryAuthException(
-        'Authenticated user ID does not match the uploader ID.',
-      );
-    }
-
     try {
-      final tripDoc = await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .get();
+      final tripRes = await SupabaseService.client
+          .from('trips')
+          .select()
+          .eq('id', tripId)
+          .maybeSingle();
 
-      if (!tripDoc.exists) {
+      if (tripRes == null) {
         throw CloudinaryAuthException('Trip $tripId does not exist.');
       }
 
-      final ownerId = tripDoc.data()?['ownerId'] as String?;
+      final ownerId = (tripRes['owner_id'] ?? tripRes['ownerId']) as String?;
       if (ownerId == uid) {
-        // Owner is authorized
         return;
       }
 
-      final memberDoc = await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('members')
-          .doc(uid)
-          .get();
+      final memberRes = await SupabaseService.client
+          .from('trip_members')
+          .select()
+          .eq('trip_id', tripId)
+          .eq('user_id', uid)
+          .maybeSingle();
 
-      if (!memberDoc.exists) {
+      if (memberRes == null) {
         throw CloudinaryAuthException(
           'User is not a member of trip $tripId. Upload denied.',
         );

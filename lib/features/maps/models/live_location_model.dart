@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:tripcrew/features/pulse/models/trip_pulse.dart';
 
 enum LocationFreshness { live, recent, stale, offline }
@@ -145,58 +144,69 @@ class LiveLocationModel {
     );
   }
 
-  Map<String, dynamic> toMap() {
+  Map<String, dynamic> toMap({String? tripId}) {
     return {
+      'id': '${tripId ?? ''}_$uid',
+      if (tripId != null) 'trip_id': tripId,
+      'user_id': uid,
       'uid': uid,
+      'user_name': displayName,
       'displayName': displayName,
       'photoUrl': photoUrl,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
       if (accuracy != null) 'accuracy': accuracy,
+      'updated_at': updatedAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
       'sharingMode': sharingMode,
+      'sharing_mode': sharingMode,
       if (sharingUntil != null) 'sharingUntil': sharingUntil?.toIso8601String(),
+      if (sharingUntil != null) 'sharing_until': sharingUntil?.toIso8601String(),
       'isSharing': isSharing,
+      'is_sharing': isSharing,
       'batteryLevel': batteryLevel,
+      'battery_level': batteryLevel,
       'lastPulse': lastPulse,
+      'last_pulse': lastPulse,
     };
-  }
-
-  Map<String, dynamic> toFirestoreMap({bool useServerTimestamp = true}) {
-    final map = toMap();
-    if (useServerTimestamp) {
-      map['updatedAt'] = FieldValue.serverTimestamp();
-    }
-    return map;
   }
 
   factory LiveLocationModel.fromMap(Map<String, dynamic> map, String id) {
     DateTime parseDate(dynamic val) {
-      if (val is Timestamp) return val.toDate();
       if (val is String) return DateTime.tryParse(val) ?? DateTime.now();
+      try {
+        final dynamic dyn = val;
+        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+      } catch (_) {}
       return DateTime.now();
     }
 
     DateTime? parseNullableDate(dynamic val) {
       if (val == null) return null;
-      if (val is Timestamp) return val.toDate();
       if (val is String) return DateTime.tryParse(val);
+      try {
+        final dynamic dyn = val;
+        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+      } catch (_) {}
       return null;
     }
 
+    final userId = (map['uid'] ?? map['user_id']) as String? ?? id;
+
     return LiveLocationModel(
-      uid: id,
-      displayName: map['displayName'] as String? ?? 'Crew Member',
+      uid: userId,
+      displayName: (map['displayName'] ?? map['user_name']) as String? ?? 'Crew Member',
       photoUrl: map['photoUrl'] as String?,
       latitude: (map['latitude'] as num?)?.toDouble(),
       longitude: (map['longitude'] as num?)?.toDouble(),
       accuracy: (map['accuracy'] as num?)?.toDouble(),
-      updatedAt: parseDate(map['updatedAt']),
-      sharingMode: map['sharingMode'] as String? ?? 'off',
-      sharingUntil: parseNullableDate(map['sharingUntil']),
-      isSharing: map['isSharing'] as bool? ?? false,
-      batteryLevel: (map['batteryLevel'] as num?)?.toDouble(),
-      lastPulse: map['lastPulse'] as String?,
+      updatedAt: parseDate(map['updatedAt'] ?? map['updated_at']),
+      sharingMode: (map['sharingMode'] ?? map['sharing_mode']) as String? ?? 'off',
+      sharingUntil: parseNullableDate(map['sharingUntil'] ?? map['sharing_until']),
+      isSharing: (map['isSharing'] ?? map['is_sharing']) as bool? ?? false,
+      batteryLevel: ((map['batteryLevel'] ?? map['battery_level']) as num?)?.toDouble(),
+      lastPulse: (map['lastPulse'] ?? map['last_pulse']) as String?,
     );
   }
 }
+

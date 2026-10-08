@@ -36,12 +36,12 @@ class ItineraryItem {
   factory ItineraryItem.fromMap(Map<String, dynamic> map, String id) {
     return ItineraryItem(
       id: id,
-      dayNumber: (map['dayNumber'] as num?)?.toInt() ?? 1,
+      dayNumber: ((map['dayNumber'] ?? map['day_number']) as num?)?.toInt() ?? 1,
       time: map['time'] as String? ?? '10:00 AM',
       title: map['title'] as String? ?? '',
-      placeName: map['placeName'] as String?,
+      placeName: (map['placeName'] ?? map['location']) as String?,
       notes: map['notes'] as String?,
-      isVisited: map['isVisited'] as bool? ?? false,
+      isVisited: (map['isVisited'] ?? map['is_completed']) as bool? ?? false,
       order: (map['order'] as num?)?.toInt() ?? 0,
     );
   }

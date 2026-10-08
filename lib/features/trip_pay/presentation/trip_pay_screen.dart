@@ -9,6 +9,7 @@ import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/shared/presentation/beta_feedback_sheet.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
+import 'package:tripcrew/features/trip_pay/models/settlement_model.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_transaction.dart';
 import 'package:tripcrew/features/trip_pay/providers/trip_pay_notifier.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
@@ -28,10 +29,14 @@ final tripPayIntroSeenUsersProvider =
       TripPayIntroNotifier.new,
     );
 
-/// Main TripCrew Pay hub screen.
-/// Displays the shared Trip Pot balance, contribution progress & crew status,
-/// transaction history with smart timestamps, crew spending activity,
-/// and trip-end settlement preview.
+/// Main TripCrew Pay hub screen with complete Transaction History.
+/// Features:
+/// - Real-time Firestore snapshots via Riverpod stream listener
+/// - Filter chips (All, Contributions, Payments, Refunds, My Activity)
+/// - Date grouping headers (Today, Yesterday, EEE, dd MMM yyyy)
+/// - Running balance displayed on each transaction tile
+/// - Member avatar with initials & color coding
+/// - Interactive merchant & description search bar
 class TripPayScreen extends ConsumerStatefulWidget {
   const TripPayScreen({super.key});
 
@@ -41,6 +46,8 @@ class TripPayScreen extends ConsumerStatefulWidget {
 
 class _TripPayScreenState extends ConsumerState<TripPayScreen> {
   int _activeSection = 0; // 0: History, 1: Crew Activity, 2: Settlement
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -63,6 +70,12 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
         }
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _showExplanationModal(BuildContext context, {bool force = false}) {
@@ -197,20 +210,30 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
-  String _formatTransactionTime(DateTime dt) {
+  String _formatDateHeader(DateTime dt) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final yesterday = today.subtract(const Duration(days: 1));
     final txDate = DateTime(dt.year, dt.month, dt.day);
-    final timeStr = DateFormat('h:mm a').format(dt);
 
     if (txDate == today) {
-      return 'Today • $timeStr';
+      return 'Today';
     } else if (txDate == yesterday) {
-      return 'Yesterday • $timeStr';
+      return 'Yesterday';
     } else {
-      return '${DateFormat("dd MMM").format(dt)} • $timeStr';
+      return DateFormat('EEE, dd MMM yyyy').format(dt);
     }
+  }
+
+  Map<String, List<TripPayTransaction>> _groupTransactionsByDate(
+    List<TripPayTransaction> transactions,
+  ) {
+    final Map<String, List<TripPayTransaction>> grouped = {};
+    for (final tx in transactions) {
+      final key = _formatDateHeader(tx.createdAt);
+      grouped.putIfAbsent(key, () => []).add(tx);
+    }
+    return grouped;
   }
 
   @override
@@ -228,11 +251,25 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     }
 
     final summary = tripPayState.summary;
-    final filteredTx = tripPayState.filteredTransactions(currentUser?.uid);
-    final memberContribs = tripPayState.memberContributions;
-    final settlements = tripPayState.calculateSettlementPreview();
+    final allFilteredTx = tripPayState.filteredTransactions(currentUser?.uid);
 
-    // Calculate user's personal contribution
+    // Filter by search query (Merchant, Notes, Category, Initiator)
+    final filteredTx = allFilteredTx.where((tx) {
+      if (_searchQuery.trim().isEmpty) return true;
+      final q = _searchQuery.toLowerCase().trim();
+      final merchant = tx.merchantName?.toLowerCase() ?? '';
+      final desc = tx.description.toLowerCase();
+      final category = tx.category.toLowerCase();
+      final initiator = tx.initiatedByName.toLowerCase();
+      return merchant.contains(q) ||
+          desc.contains(q) ||
+          category.contains(q) ||
+          initiator.contains(q);
+    }).toList();
+
+    final groupedTx = _groupTransactionsByDate(filteredTx);
+    final memberContribs = tripPayState.memberContributions;
+
     int myContributionPaise = 0;
     if (currentUser != null) {
       for (final mc in memberContribs) {
@@ -243,7 +280,6 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
       }
     }
 
-    // Target calculation: trip budget in paise
     final targetPaise = CurrencyFormatter.toSmallestUnit(activeTrip.budget);
     final collectedPaise = summary?.totalContributedPaise ?? 0;
     final progress = targetPaise > 0 ? (collectedPaise / targetPaise) : 0.0;
@@ -286,7 +322,7 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                       children: [
                         const SizedBox(height: AppConstants.spaceSm),
 
-                        // Sandbox Mode Header Banner
+                        // Mode Banner
                         _buildSandboxBanner(),
                         const SizedBox(height: AppConstants.spaceSm),
 
@@ -358,7 +394,7 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                         ),
                         const SizedBox(height: AppConstants.spaceLg),
 
-                        // Section Tabs: Transaction History, Crew Activity, Settlement
+                        // Navigation Tabs
                         SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
@@ -386,9 +422,39 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                         ),
                         const SizedBox(height: AppConstants.spaceMd),
 
-                        // Section 0: Transaction History
+                        // SECTION 0: COMPLETE TRANSACTION HISTORY
                         if (_activeSection == 0) ...[
-                          // Filter Chips
+                          // 1. Search Bar (Search by merchant / notes)
+                          TextField(
+                            controller: _searchController,
+                            decoration: InputDecoration(
+                              hintText: 'Search by merchant, note, or member...',
+                              prefixIcon: const Icon(Icons.search_rounded),
+                              suffixIcon: _searchQuery.isNotEmpty
+                                  ? IconButton(
+                                      icon: const Icon(Icons.clear_rounded),
+                                      onPressed: () {
+                                        _searchController.clear();
+                                        setState(() => _searchQuery = '');
+                                      },
+                                    )
+                                  : null,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onChanged: (val) {
+                              setState(() => _searchQuery = val);
+                            },
+                          ),
+                          const SizedBox(height: AppConstants.spaceSm),
+
+                          // 2. Filter Chips
                           SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: Row(
@@ -420,20 +486,29 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                           ),
                           const SizedBox(height: AppConstants.spaceSm),
 
+                          // 3. Grouped Transaction List with Date Headers & Running Balances
                           if (filteredTx.isEmpty)
-                            const AppEmptyState(
+                            AppEmptyState(
                               icon: Icons.receipt_long_rounded,
-                              title: 'No transactions yet',
-                              message:
-                                  'Trip activity will appear here once contributions or payments are made.',
+                              title: _searchQuery.isNotEmpty
+                                  ? 'No matching transactions'
+                                  : 'No transactions yet',
+                              message: _searchQuery.isNotEmpty
+                                  ? 'No transactions found matching "$_searchQuery".'
+                                  : 'Trip activity will appear here once contributions or payments are made.',
                             )
                           else
-                            ...filteredTx.map(
-                              (tx) => _buildTransactionTile(theme, tx),
-                            ),
+                            ...groupedTx.entries.expand((entry) {
+                              return [
+                                _buildDateHeader(theme, entry.key),
+                                ...entry.value.map(
+                                  (tx) => _buildTransactionTile(theme, tx),
+                                ),
+                              ];
+                            }),
                         ],
 
-                        // Section 1: Crew Spending Activity
+                        // SECTION 1: CREW SPENDING ACTIVITY
                         if (_activeSection == 1) ...[
                           Text(
                             'CREW ACTIVITY',
@@ -457,13 +532,17 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                             ),
                         ],
 
-                        // Section 2: Trip-End Settlement Preview
+                        // SECTION 2: TRIP-END SETTLEMENT PREVIEW
                         if (_activeSection == 2) ...[
                           _buildSettlementPreview(
+                            context,
+                            ref,
                             theme,
                             summary,
-                            settlements,
+                            tripPayState.settlementPlan,
                             tripPayState.memberNames,
+                            activeTrip.id,
+                            tripPayState.isProcessing,
                           ),
                         ],
 
@@ -477,9 +556,35 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
+  Widget _buildDateHeader(ThemeData theme, String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 6),
+      child: Row(
+        children: [
+          Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Divider(
+              color: theme.colorScheme.outlineVariant.withValues(alpha: 0.5),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildSandboxBanner() {
     final tripPayState = ref.watch(tripPayProvider);
-    final isSetu = tripPayState.providerType == PaymentProviderType.setu;
+    final isRazorpay =
+        tripPayState.providerType == PaymentProviderType.razorpay;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -494,8 +599,8 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              isSetu
-                  ? 'TripCrew Pay • UPI TEST MODE • Setu UAT Sandbox • No real money is transferred.'
+              isRazorpay
+                  ? 'TripCrew Pay • PAYMENT TEST MODE • Razorpay Orders API • No real money is transferred.'
                   : 'PAYMENT TEST MODE • Sandbox UPI Simulator • No real money is transferred.',
               style: const TextStyle(
                 fontSize: 11,
@@ -561,7 +666,9 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             onPressed: () {
-              ref.read(tripPayProvider.notifier).recoverPendingPayments(tripId);
+              ref
+                  .read(tripPayProvider.notifier)
+                  .recoverPendingPayments(tripId);
             },
             child: const Text(
               'Verify Now',
@@ -573,12 +680,6 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
-  /// Prioritized Pot Card per Item 3:
-  /// SHARED TRIP POT
-  /// Available: ₹X
-  /// Total Added: ₹X
-  /// Total Spent: ₹X
-  /// Your Contribution: ₹X
   Widget _buildPotCard(
     ThemeData theme,
     dynamic summary,
@@ -623,7 +724,10 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 3,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(12),
@@ -739,11 +843,6 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
-  /// Contribution Progress per Item 4:
-  /// Trip Target: ₹20,000
-  /// Collected: ₹15,000
-  /// 75%
-  /// Crew: A ₹5,000 ✅, B ₹5,000 ✅, C ₹5,000 ✅, D Not added
   Widget _buildContributionProgressCard(
     ThemeData theme,
     int targetPaise,
@@ -779,10 +878,10 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                 ),
                 Text(
                   '$percent%',
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 14,
-                    color: const Color(0xFF10B981),
+                    color: Color(0xFF10B981),
                   ),
                 ),
               ],
@@ -942,108 +1041,96 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
-  /// Transaction History Tile per Item 7:
-  /// WHO initiated it, WHAT it was for, HOW MUCH, WHEN
-  /// Example:
-  /// Dinner
-  /// -₹1,200
-  /// Initiated by Arun
-  /// Today • 8:42 PM
+  /// Transaction History Tile displaying:
+  /// - Member Avatar & Initials
+  /// - Merchant Name / Description & Category
+  /// - Initiator Name & Smart Time
+  /// - Transaction Amount (+/-)
+  /// - Running Balance Post-Transaction
   Widget _buildTransactionTile(ThemeData theme, TripPayTransaction tx) {
     final isCredit = tx.isCredit;
+    final title = tx.merchantName?.isNotEmpty == true
+        ? tx.merchantName!
+        : (tx.description.isNotEmpty ? tx.description : tx.type.label);
 
-    String initiatorPrefix;
-    if (tx.type == TripPayTransactionType.payment) {
-      initiatorPrefix = 'Initiated by ${tx.initiatedByName}';
-    } else if (tx.type == TripPayTransactionType.contribution) {
-      initiatorPrefix = 'Added by ${tx.initiatedByName}';
-    } else if (tx.type == TripPayTransactionType.refund) {
-      initiatorPrefix = 'Refunded by ${tx.initiatedByName}';
-    } else {
-      initiatorPrefix = 'Initiated by ${tx.initiatedByName}';
-    }
+    final subtitleDetail = tx.merchantName?.isNotEmpty == true &&
+            tx.description.isNotEmpty
+        ? '${tx.description} • ${tx.category}'
+        : tx.category;
+
+    final String initiatorStr = tx.initiatedByName.isNotEmpty
+        ? tx.initiatedByName
+        : 'Crew Member';
+
+    final initial = initiatorStr.isNotEmpty ? initiatorStr[0].toUpperCase() : '?';
+
+    final formattedTime = DateFormat('h:mm a').format(tx.createdAt);
+    final headerDate = _formatDateHeader(tx.createdAt);
 
     return Card(
       margin: const EdgeInsets.only(bottom: AppConstants.spaceSm),
       clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+        side: BorderSide(
+          color: theme.colorScheme.outlineVariant.withValues(alpha: 0.4),
+        ),
+      ),
       child: InkWell(
         onTap: () => _showTransactionDetails(context, tx),
         child: Padding(
           padding: const EdgeInsets.all(AppConstants.spaceMd),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
+              // Member Avatar with Initial
               CircleAvatar(
                 radius: 20,
                 backgroundColor: isCredit
-                    ? const Color(0xFF10B981).withValues(alpha: 0.12)
-                    : const Color(0xFFEF4444).withValues(alpha: 0.12),
-                child: Icon(
-                  isCredit
-                      ? Icons.arrow_downward_rounded
-                      : Icons.arrow_upward_rounded,
-                  color: isCredit
-                      ? const Color(0xFF10B981)
-                      : const Color(0xFFEF4444),
-                  size: 20,
+                    ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                    : const Color(0xFFEF4444).withValues(alpha: 0.15),
+                child: Text(
+                  initial,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 15,
+                    color: isCredit
+                        ? const Color(0xFF047857)
+                        : const Color(0xFFB91C1C),
+                  ),
                 ),
               ),
               const SizedBox(width: AppConstants.spaceSm),
+
+              // Transaction Info (Title, Subtitle, Initiator, Date)
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      tx.description.isNotEmpty
-                          ? tx.description
-                          : tx.type.label,
+                      title,
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            initiatorPrefix,
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurfaceVariant,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        if (tx.type == TripPayTransactionType.contribution) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: const Color(
-                                0xFF10B981,
-                              ).withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'UPI • Successful',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF047857),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      _formatTransactionTime(tx.createdAt),
+                      '$subtitleDetail • by $initiatorStr',
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$headerDate • $formattedTime',
                       style: TextStyle(
                         color: theme.colorScheme.onSurfaceVariant.withValues(
                           alpha: 0.7,
@@ -1055,15 +1142,43 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                   ],
                 ),
               ),
-              Text(
-                '${isCredit ? '+' : '-'}${CurrencyFormatter.formatUnits(tx.amountPaise)}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  fontSize: 15,
-                  color: isCredit
-                      ? const Color(0xFF10B981)
-                      : const Color(0xFFEF4444),
-                ),
+
+              const SizedBox(width: 8),
+
+              // Transaction Amount & Running Balance
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${isCredit ? '+' : '-'}${CurrencyFormatter.formatUnits(tx.amountPaise)}',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      color: isCredit
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444),
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Bal: ${CurrencyFormatter.formatUnits(tx.balanceAfterPaise)}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1074,7 +1189,8 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
 
   void _showTransactionDetails(BuildContext context, TripPayTransaction tx) {
     final activeTrip = ref.read(activeTripProvider);
-    final isPayment = tx.type == TripPayTransactionType.payment;
+    final isPayment = tx.type == TripPayTransactionType.payment ||
+        tx.type == TripPayTransactionType.expense;
 
     showModalBottomSheet(
       context: context,
@@ -1134,7 +1250,9 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                   ),
                 ),
                 title: Text(
-                  tx.description,
+                  tx.merchantName?.isNotEmpty == true
+                      ? '${tx.merchantName} (${tx.description})'
+                      : tx.description,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 subtitle: Text(
@@ -1153,6 +1271,9 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
               ),
               const Divider(),
               _detailRow('Initiated By', tx.initiatedByName),
+              if (tx.merchantName != null && tx.merchantName!.isNotEmpty)
+                _detailRow('Merchant', tx.merchantName!),
+              _detailRow('Category', tx.category),
               _detailRow(
                 'Payment Provider',
                 tx.type == TripPayTransactionType.contribution
@@ -1250,8 +1371,6 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     );
   }
 
-  /// Member Activity Tile per Item 8:
-  /// Contributed, Payments initiated, Amount of Trip Pot spending initiated
   Widget _buildActivityTile(ThemeData theme, MemberContribution mc) {
     return Card(
       margin: const EdgeInsets.only(bottom: AppConstants.spaceSm),
@@ -1316,25 +1435,59 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
   }
 
   Widget _buildSettlementPreview(
+    BuildContext context,
+    WidgetRef ref,
     ThemeData theme,
     dynamic summary,
-    Map<String, int> settlements,
+    SettlementPlan plan,
     Map<String, String> memberNames,
+    String tripId,
+    bool isProcessing,
   ) {
-    final contributed = summary?.totalContributedPaise ?? 0;
-    final spent = summary?.totalSpentPaise ?? 0;
-    final remaining = summary?.availableBalancePaise ?? 0;
+    final contributed = plan.totalContributedPaise;
+    final spent = plan.totalSpentPaise;
+    final remaining = plan.remainingPotPaise;
+    final isSettled = plan.isSettled;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'TRIP-END BALANCE',
-          style: theme.textTheme.labelMedium?.copyWith(
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.8,
-            color: theme.colorScheme.onSurfaceVariant,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'TRIP-END BALANCE',
+              style: theme.textTheme.labelMedium?.copyWith(
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.8,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            if (isSettled)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFD1FAE5),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF10B981)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.check_circle, size: 14, color: Color(0xFF047857)),
+                    SizedBox(width: 4),
+                    Text(
+                      'SETTLED',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF047857),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
         ),
         const SizedBox(height: AppConstants.spaceSm),
         Card(
@@ -1346,100 +1499,359 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                 _buildSettlementRow(
                   theme,
                   'Total contributed',
-                  CurrencyFormatter.formatUnits(contributed as int),
+                  CurrencyFormatter.formatUnits(contributed),
                 ),
                 const Divider(height: 16),
                 _buildSettlementRow(
                   theme,
-                  'Spent',
-                  CurrencyFormatter.formatUnits(spent as int),
+                  'Total spent',
+                  CurrencyFormatter.formatUnits(spent),
                 ),
                 const Divider(height: 16),
                 _buildSettlementRow(
                   theme,
-                  'Remaining',
-                  CurrencyFormatter.formatUnits(remaining as int),
+                  'Remaining Pot',
+                  CurrencyFormatter.formatUnits(remaining),
                   bold: true,
                 ),
               ],
             ),
           ),
         ),
-        const SizedBox(height: AppConstants.spaceMd),
-        if (remaining > 0 && settlements.isNotEmpty) ...[
-          Text(
-            'SANDBOX SETTLEMENT PREVIEW',
-            style: theme.textTheme.labelMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.8,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
+        const SizedBox(height: AppConstants.spaceLg),
+
+        // MEMBER BALANCES
+        Text(
+          'MEMBER BALANCES',
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
+            color: theme.colorScheme.onSurfaceVariant,
           ),
-          const SizedBox(height: AppConstants.spaceSm),
-          Container(
-            padding: const EdgeInsets.all(AppConstants.spaceMd),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFEF3C7),
-              borderRadius: BorderRadius.circular(AppConstants.radiusMd),
-              border: Border.all(color: const Color(0xFFF59E0B)),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.info_outline, color: Color(0xFFB45309), size: 16),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Proportional refund based on actual contributions. Real settlement requires a payment partner.',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF92400E)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppConstants.spaceSm),
-          ...settlements.entries.map((entry) {
-            final name = memberNames[entry.key] ?? 'Member';
+        ),
+        const SizedBox(height: AppConstants.spaceSm),
+        if (plan.memberBalances.isEmpty)
+          const AppEmptyState(
+            icon: Icons.group_outlined,
+            title: 'No member data',
+            message: 'Member balances will be calculated when trip members exist.',
+          )
+        else
+          ...plan.memberBalances.map((mb) {
+            final isCreditor = mb.netBalancePaise > 0;
+            final isDebtor = mb.netBalancePaise < 0;
+            final badgeColor = isCreditor
+                ? const Color(0xFF10B981)
+                : (isDebtor ? const Color(0xFFEF4444) : theme.colorScheme.outline);
+            final badgeBg = isCreditor
+                ? const Color(0xFFD1FAE5)
+                : (isDebtor ? const Color(0xFFFEE2E2) : const Color(0xFFF3F4F6));
+            final badgeText = isCreditor
+                ? '+${CurrencyFormatter.formatUnits(mb.netBalancePaise)} (Gets refund)'
+                : (isDebtor
+                    ? '${CurrencyFormatter.formatUnits(mb.netBalancePaise)} (Owes payment)'
+                    : 'Balanced');
+
             return Card(
-              margin: const EdgeInsets.only(bottom: 4),
-              child: ListTile(
-                dense: true,
-                leading: CircleAvatar(
-                  radius: 16,
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  child: Text(
-                    name.isNotEmpty ? name[0].toUpperCase() : '?',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: theme.colorScheme.primary,
+              margin: const EdgeInsets.only(bottom: 8),
+              child: Padding(
+                padding: const EdgeInsets.all(AppConstants.spaceMd),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: theme.colorScheme.primaryContainer,
+                      child: Text(
+                        mb.displayName.isNotEmpty
+                            ? mb.displayName[0].toUpperCase()
+                            : '?',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            mb.displayName,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Contributed: ${CurrencyFormatter.formatUnits(mb.totalContributedPaise)} • Fair share: ${CurrencyFormatter.formatUnits(mb.fairSharePaise)}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: badgeBg,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        badgeText,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: badgeColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }),
+
+        const SizedBox(height: AppConstants.spaceLg),
+
+        // WHO PAYS WHOM / SETTLEMENT TRANSFERS
+        Text(
+          'WHO PAYS WHOM',
+          style: theme.textTheme.labelMedium?.copyWith(
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.8,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: AppConstants.spaceSm),
+        if (plan.transfers.isEmpty)
+          Card(
+            color: theme.colorScheme.surfaceContainerLow,
+            child: const Padding(
+              padding: EdgeInsets.all(AppConstants.spaceLg),
+              child: Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: Color(0xFF10B981)),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'All accounts are completely balanced. No settlement transfers needed.',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ),
-                ),
-                title: Text(
-                  name,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                ],
+              ),
+            ),
+          )
+        else
+          ...plan.transfers.map((transfer) {
+            final isPotRefund = transfer.type == 'pot_refund';
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: isPotRefund
+                      ? const Color(0xFFD1FAE5)
+                      : theme.colorScheme.secondaryContainer,
+                  child: Icon(
+                    isPotRefund
+                        ? Icons.savings_outlined
+                        : Icons.swap_horiz_rounded,
+                    color: isPotRefund
+                        ? const Color(0xFF047857)
+                        : theme.colorScheme.onSecondaryContainer,
                   ),
                 ),
+                title: Row(
+                  children: [
+                    Text(
+                      transfer.fromName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 6),
+                      child: Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 14,
+                        color: Colors.grey,
+                      ),
+                    ),
+                    Text(
+                      transfer.toName,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+                subtitle: Text(
+                  isPotRefund ? 'Pot Refund' : 'Peer-to-Peer Settlement',
+                  style: const TextStyle(fontSize: 11),
+                ),
                 trailing: Text(
-                  CurrencyFormatter.formatUnits(entry.value),
-                  style: const TextStyle(
+                  CurrencyFormatter.formatUnits(transfer.amountPaise),
+                  style: TextStyle(
                     fontWeight: FontWeight.w800,
-                    color: Color(0xFF10B981),
-                    fontSize: 14,
+                    fontSize: 15,
+                    color: isPotRefund
+                        ? const Color(0xFF10B981)
+                        : theme.colorScheme.primary,
                   ),
                 ),
               ),
             );
           }),
-        ] else if (remaining == 0)
-          const AppEmptyState(
-            icon: Icons.check_circle_outline,
-            title: 'All funds used',
-            message: 'The Trip Pot has been fully spent. No settlement needed.',
+
+        const SizedBox(height: AppConstants.spaceLg),
+
+        // SETTLEMENT ACTION BUTTON
+        if (!isSettled)
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: isProcessing
+                  ? null
+                  : () => _confirmAndExecuteSettlement(context, ref, tripId, plan),
+              icon: isProcessing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.gavel_rounded),
+              label: Text(
+                isProcessing ? 'Settling Trip...' : 'Execute Atomic Settlement',
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                backgroundColor: const Color(0xFF059669),
+              ),
+            ),
+          )
+        else
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(AppConstants.spaceMd),
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1FAE5),
+              borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+              border: Border.all(color: const Color(0xFF10B981)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.lock_outline, color: Color(0xFF047857), size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Trip Settlement Completed. Ledger is locked and final balance has been set to 0.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF047857),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
       ],
+    );
+  }
+
+  void _confirmAndExecuteSettlement(
+    BuildContext context,
+    WidgetRef ref,
+    String tripId,
+    SettlementPlan plan,
+  ) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.gavel_rounded, color: Color(0xFF059669)),
+            SizedBox(width: 8),
+            Text('Execute Settlement?'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'This action will atomically finalize the Trip Pot ledger on Firestore:\n',
+              style: TextStyle(fontSize: 13),
+            ),
+            Text(
+              '• Create ${plan.transfers.length} settlement transaction(s)',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const Text(
+              '• Set remaining Trip Pot balance to ₹0.00',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const Text(
+              '• Lock trip settlement status',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Are you sure you want to proceed?',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final success = await ref
+                  .read(tripPayProvider.notifier)
+                  .executeSettlement(tripId: tripId);
+
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? 'Trip settlement executed successfully!'
+                          : 'Settlement failed. Please check network connection.',
+                    ),
+                    backgroundColor:
+                        success ? const Color(0xFF059669) : Colors.red,
+                  ),
+                );
+              }
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF059669),
+            ),
+            child: const Text('Confirm Settlement'),
+          ),
+        ],
+      ),
     );
   }
 

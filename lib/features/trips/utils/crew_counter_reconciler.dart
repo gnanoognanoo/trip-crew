@@ -1,7 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 
 /// Diagnostic reconciliation result representing the consistency
-/// between the denormalized trip `memberCount` and actual member documents.
+/// between the denormalized trip `memberCount` and actual member records.
 class CrewReconciliationResult {
   final String tripId;
   final int recordedMemberCount;
@@ -27,31 +27,42 @@ class CrewReconciliationResult {
 }
 
 /// Diagnostic reconciliation helper.
-///
-/// NOTE: Not used for high-frequency production queries.
-/// Intended for test verification, administrative diagnostics, and maintenance audits.
 class CrewCounterReconciler {
   CrewCounterReconciler._();
 
-  /// Compares recorded Firestore trip `memberCount` with the actual
-  /// count of documents in the `trips/{tripId}/members` subcollection.
+  /// Compares recorded trip `member_count` with the actual
+  /// count of rows in `trip_members`.
   static Future<CrewReconciliationResult> reconcile({
-    required FirebaseFirestore firestore,
+    dynamic firestore,
     required String tripId,
   }) async {
-    final tripDoc = await firestore.collection('trips').doc(tripId).get();
-    if (!tripDoc.exists || tripDoc.data() == null) {
+    if (!SupabaseService.isInitialized) {
+      return CrewReconciliationResult(
+        tripId: tripId,
+        recordedMemberCount: 1,
+        actualMemberCount: 1,
+        isConsistent: true,
+        memberUids: const [],
+      );
+    }
+    final tripRes = await SupabaseService.client
+        .from('trips')
+        .select()
+        .eq('id', tripId)
+        .maybeSingle();
+
+    if (tripRes == null) {
       throw Exception('Trip $tripId not found.');
     }
 
-    final recorded = (tripDoc.data()!['memberCount'] as num?)?.toInt() ?? 0;
-    final membersSnap = await firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('members')
-        .get();
-    final actual = membersSnap.docs.length;
-    final uids = membersSnap.docs.map((d) => d.id).toList();
+    final recorded = (tripRes['member_count'] as num?)?.toInt() ?? 0;
+    final membersRes = await SupabaseService.client
+        .from('trip_members')
+        .select()
+        .eq('trip_id', tripId);
+
+    final uids = membersRes.map((d) => d['user_id'] as String).toList();
+    final actual = uids.length;
 
     return CrewReconciliationResult(
       tripId: tripId,

@@ -1,17 +1,16 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/checklist/models/checklist_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 9: Packing Checklist screen connected to real Firestore trips/{tripId}/checklist.
+/// Screen 9: Packing Checklist screen connected to Supabase PostgreSQL checklist_items.
 class ChecklistScreen extends ConsumerStatefulWidget {
   const ChecklistScreen({super.key});
 
@@ -32,45 +31,41 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
     _listenToChecklist();
   }
 
-  void _listenToChecklist() {
+  void _listenToChecklist() async {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _sub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('checklist')
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final loaded = snapshot.docs
-                  .map((doc) => ChecklistItem.fromMap(doc.data(), doc.id))
-                  .toList();
+    if (SupabaseService.isInitialized) {
+      try {
+        final res = await SupabaseService.client
+            .from('checklist_items')
+            .select()
+            .eq('trip_id', activeTrip.id)
+            .order('created_at', ascending: true);
 
-              if (mounted) {
-                setState(() {
-                  _items = loaded;
-                  _isLoading = false;
-                  _errorMessage = null;
-                });
-              }
-            },
-            onError: (e) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _errorMessage =
-                      'Could not load checklist. Check your connection.';
-                });
-              }
-            },
-          );
+        final loaded = res
+            .map((doc) => ChecklistItem.fromMap(Map<String, dynamic>.from(doc), doc['id'] as String))
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _items = loaded;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Could not load checklist. Check your connection.';
+          });
+        }
+      }
     } else {
-      // Local fallback
       setState(() => _isLoading = false);
     }
   }
@@ -162,13 +157,16 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
                           isShared: assigned == null,
                         );
 
-                        if (FirebaseService.isInitialized) {
-                          await FirebaseFirestore.instance
-                              .collection('trips')
-                              .doc(tripId)
-                              .collection('checklist')
-                              .doc(newItem.id)
-                              .set(newItem.toMap());
+                        if (SupabaseService.isInitialized) {
+                          await SupabaseService.client.from('checklist_items').insert({
+                            'id': newItem.id,
+                            'trip_id': tripId,
+                            'title': newItem.title,
+                            'is_completed': false,
+                            'assigned_to_name': assigned,
+                            'created_at': DateTime.now().toIso8601String(),
+                          });
+                          setState(() => _items.add(newItem));
                         } else {
                           setState(() => _items.add(newItem));
                         }
@@ -204,13 +202,18 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
   void _toggleChecklistItem(ChecklistItem item, String tripId) async {
     final updated = !item.isCompleted;
 
-    if (FirebaseService.isInitialized) {
-      await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('checklist')
-          .doc(item.id)
-          .update({'isCompleted': updated});
+    if (SupabaseService.isInitialized) {
+      await SupabaseService.client
+          .from('checklist_items')
+          .update({'is_completed': updated})
+          .eq('id', item.id);
+
+      setState(() {
+        final idx = _items.indexWhere((i) => i.id == item.id);
+        if (idx != -1) {
+          _items[idx] = item.copyWith(isCompleted: updated);
+        }
+      });
     } else {
       setState(() {
         final idx = _items.indexWhere((i) => i.id == item.id);
@@ -256,7 +259,6 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Filter Chips
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppConstants.spaceLg,
@@ -273,7 +275,6 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
               ),
             ),
 
-            // Categorized Items
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -372,7 +373,6 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
                     ),
             ),
 
-            // Bottom Add Item Button
             Padding(
               padding: const EdgeInsets.all(AppConstants.spaceLg),
               child: SizedBox(

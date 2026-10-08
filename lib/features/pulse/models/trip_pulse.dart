@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// Supported Trip Pulse types representing a user's current need.
 enum PulseType {
@@ -144,15 +143,22 @@ class TripPulse {
 
   DateTime get timestamp => createdAt; // Backwards compatibility
 
-  Map<String, dynamic> toMap() {
+  Map<String, dynamic> toMap({String? tripId}) {
     return {
+      'id': '${tripId ?? ''}_$uid',
+      if (tripId != null) 'trip_id': tripId,
+      'user_id': uid,
       'uid': uid,
+      'user_name': memberName,
       'memberName': memberName,
+      'pulse_type': pulseType,
       'pulseType': pulseType,
       'type': type,
-      'createdAt': Timestamp.fromDate(createdAt),
-      'timestamp': Timestamp.fromDate(createdAt),
-      'expiresAt': Timestamp.fromDate(expiresAt),
+      'created_at': createdAt.toIso8601String(),
+      'createdAt': createdAt.toIso8601String(),
+      'expires_at': expiresAt.toIso8601String(),
+      'expiresAt': expiresAt.toIso8601String(),
+      'is_active': isActive,
       'isActive': isActive,
     };
   }
@@ -160,27 +166,32 @@ class TripPulse {
   factory TripPulse.fromMap(Map<String, dynamic> map, String id) {
     DateTime parseDate(dynamic v, DateTime fallback) {
       if (v == null) return fallback;
-      if (v is Timestamp) return v.toDate();
       if (v is String) return DateTime.tryParse(v) ?? fallback;
+      try {
+        final dynamic dyn = v;
+        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+      } catch (_) {}
       return fallback;
     }
 
     final now = DateTime.now();
-    final createdAt = parseDate(map['createdAt'] ?? map['timestamp'], now);
+    final createdAt = parseDate(map['createdAt'] ?? map['created_at'] ?? map['timestamp'], now);
     final rawType =
-        map['type'] as String? ?? map['pulseType'] as String? ?? 'hungry';
+        map['type'] as String? ?? map['pulseType'] as String? ?? map['pulse_type'] as String? ?? 'hungry';
     final parsedEnum = PulseType.fromString(rawType) ?? PulseType.hungry;
 
-    final expiresAt = map['expiresAt'] != null
-        ? parseDate(map['expiresAt'], createdAt.add(parsedEnum.defaultDuration))
+    final expiresAt = (map['expiresAt'] != null || map['expires_at'] != null)
+        ? parseDate(map['expiresAt'] ?? map['expires_at'], createdAt.add(parsedEnum.defaultDuration))
         : createdAt.add(parsedEnum.defaultDuration);
 
-    final isActive = map['isActive'] as bool? ?? true;
-    final pulseType = map['pulseType'] as String? ?? parsedEnum.title;
+    final isActive = (map['isActive'] ?? map['is_active']) as bool? ?? true;
+    final pulseType = (map['pulseType'] ?? map['pulse_type']) as String? ?? parsedEnum.title;
+    final userId = (map['uid'] ?? map['user_id']) as String? ?? id;
+    final memberName = (map['memberName'] ?? map['user_name']) as String? ?? 'Crew Member';
 
     return TripPulse(
-      uid: id,
-      memberName: map['memberName'] as String? ?? 'Crew Member',
+      uid: userId,
+      memberName: memberName,
       pulseType: pulseType,
       type: parsedEnum.key,
       createdAt: createdAt,

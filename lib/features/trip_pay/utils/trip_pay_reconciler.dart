@@ -59,6 +59,7 @@ class TripPayReconciler {
           totalContributedPaise += tx.amountPaise;
           break;
         case TripPayTransactionType.payment:
+        case TripPayTransactionType.expense:
           totalSpentPaise += tx.amountPaise;
           break;
         case TripPayTransactionType.refund:

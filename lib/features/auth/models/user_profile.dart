@@ -26,34 +26,39 @@ class UserProfile {
 
   Map<String, dynamic> toMap() {
     return {
+      'id': uid,
       'uid': uid,
+      'full_name': name,
       'name': name,
       'email': email,
       'phone': phone,
+      'avatar_url': photoUrl,
       'photoUrl': photoUrl,
       'tripCount': tripCount,
       'distanceKm': distanceKm,
       'memoryCount': memoryCount,
+      'created_at': createdAt.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
+      'updated_at': updatedAt.toIso8601String(),
       'updatedAt': updatedAt.toIso8601String(),
     };
   }
 
   factory UserProfile.fromMap(Map<String, dynamic> map, String id) {
     return UserProfile(
-      uid: id,
-      name: map['name'] as String? ?? 'Traveler',
+      uid: (map['uid'] ?? map['id']) as String? ?? id,
+      name: (map['name'] ?? map['full_name']) as String? ?? 'Traveler',
       email: map['email'] as String? ?? '',
       phone: map['phone'] as String?,
-      photoUrl: map['photoUrl'] as String?,
+      photoUrl: (map['photoURL'] ?? map['photoUrl'] ?? map['avatar_url']) as String?,
       tripCount: (map['tripCount'] as num?)?.toInt() ?? 0,
       distanceKm: (map['distanceKm'] as num?)?.toInt() ?? 0,
       memoryCount: (map['memoryCount'] as num?)?.toInt() ?? 0,
-      createdAt: map['createdAt'] != null
-          ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
+      createdAt: (map['createdAt'] ?? map['created_at']) != null
+          ? DateTime.tryParse((map['createdAt'] ?? map['created_at']).toString()) ?? DateTime.now()
           : DateTime.now(),
-      updatedAt: map['updatedAt'] != null
-          ? DateTime.tryParse(map['updatedAt'].toString()) ?? DateTime.now()
+      updatedAt: (map['updatedAt'] ?? map['updated_at']) != null
+          ? DateTime.tryParse((map['updatedAt'] ?? map['updated_at']).toString()) ?? DateTime.now()
           : DateTime.now(),
     );
   }

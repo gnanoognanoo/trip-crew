@@ -12,6 +12,7 @@ class TripModel {
   final String currency;
   final String inviteCode;
   final String status; // active, upcoming, completed
+  final bool isActive;
   final int memberCount;
   final int totalSpendingPaise;
   final DateTime createdAt;
@@ -29,7 +30,8 @@ class TripModel {
     this.budget = 20000.0,
     this.currency = 'INR (₹)',
     required this.inviteCode,
-    this.status = 'upcoming',
+    this.status = 'active',
+    this.isActive = true,
     this.memberCount = 1,
     this.totalSpendingPaise = 0,
     required this.createdAt,
@@ -48,12 +50,6 @@ class TripModel {
     return endDate.difference(startDate).inDays + 1;
   }
 
-  bool get isActive {
-    final now = DateTime.now();
-    return now.isAfter(startDate.subtract(const Duration(hours: 12))) &&
-        now.isBefore(endDate.add(const Duration(hours: 24)));
-  }
-
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -68,6 +64,7 @@ class TripModel {
       'currency': currency,
       'inviteCode': inviteCode,
       'status': status,
+      'isActive': isActive,
       'memberCount': memberCount,
       'totalSpendingPaise': totalSpendingPaise,
       'createdAt': createdAt.toIso8601String(),
@@ -76,31 +73,63 @@ class TripModel {
   }
 
   factory TripModel.fromMap(Map<String, dynamic> map, String id) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final startDateParsed = map['startDate'] != null
+        ? DateTime.tryParse(map['startDate'].toString()) ?? today
+        : (map['start_date'] != null
+            ? DateTime.tryParse(map['start_date'].toString()) ?? today
+            : today);
+
+    final endDateParsed = map['endDate'] != null
+        ? DateTime.tryParse(map['endDate'].toString()) ?? today.add(const Duration(days: 3))
+        : (map['end_date'] != null
+            ? DateTime.tryParse(map['end_date'].toString()) ?? today.add(const Duration(days: 3))
+            : today.add(const Duration(days: 3)));
+
+    String statusStr = (map['status'] ?? map['trip_status']) as String? ?? '';
+    if (statusStr.isEmpty) {
+      if (startDateParsed.isAfter(today)) {
+        statusStr = 'upcoming';
+      } else if (endDateParsed.isBefore(today)) {
+        statusStr = 'completed';
+      } else {
+        statusStr = 'active';
+      }
+    }
+
+    final activeBool = map['isActive'] as bool? ??
+        map['is_active'] as bool? ??
+        (statusStr == 'active');
+    final nameStr = (map['name'] ?? map['title']) as String? ?? 'Trip';
+
     return TripModel(
       id: id,
-      ownerId: map['ownerId'] as String? ?? '',
-      name: map['name'] as String? ?? 'Trip',
-      startingPlace: map['startingPlace'] as String? ?? '',
-      destination: map['destination'] as String? ?? '',
-      startDate: map['startDate'] != null
-          ? DateTime.tryParse(map['startDate'].toString()) ?? DateTime.now()
-          : DateTime.now(),
-      endDate: map['endDate'] != null
-          ? DateTime.tryParse(map['endDate'].toString()) ?? DateTime.now()
-          : DateTime.now().add(const Duration(days: 3)),
-      tripType: map['tripType'] as String? ?? 'Road Trip',
+      ownerId: (map['ownerId'] ?? map['created_by'] ?? map['owner_id']) as String? ?? '',
+      name: nameStr,
+      startingPlace: (map['startingPlace'] ?? map['starting_place']) as String? ?? '',
+      destination: (map['destination']) as String? ?? '',
+      startDate: startDateParsed,
+      endDate: endDateParsed,
+      tripType: (map['tripType'] ?? map['trip_type']) as String? ?? 'Road Trip',
       budget: (map['budget'] as num?)?.toDouble() ?? 20000.0,
       currency: map['currency'] as String? ?? 'INR (₹)',
-      inviteCode: map['inviteCode'] as String? ?? '',
-      status: map['status'] as String? ?? 'upcoming',
-      memberCount: (map['memberCount'] as num?)?.toInt() ?? 1,
-      totalSpendingPaise: (map['totalSpendingPaise'] as num?)?.toInt() ?? 0,
+      inviteCode: (map['inviteCode'] ?? map['invite_code']) as String? ?? '',
+      status: statusStr,
+      isActive: activeBool,
+      memberCount: ((map['memberCount'] ?? map['member_count']) as num?)?.toInt() ?? 1,
+      totalSpendingPaise: ((map['totalSpendingPaise'] ?? map['total_spending_paise']) as num?)?.toInt() ?? 0,
       createdAt: map['createdAt'] != null
           ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (map['created_at'] != null
+              ? DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
       updatedAt: map['updatedAt'] != null
           ? DateTime.tryParse(map['updatedAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (map['updated_at'] != null
+              ? DateTime.tryParse(map['updated_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
     );
   }
 
@@ -114,6 +143,7 @@ class TripModel {
     double? budget,
     String? currency,
     String? status,
+    bool? isActive,
     int? memberCount,
     int? totalSpendingPaise,
   }) {
@@ -130,6 +160,7 @@ class TripModel {
       currency: currency ?? this.currency,
       inviteCode: inviteCode,
       status: status ?? this.status,
+      isActive: isActive ?? this.isActive,
       memberCount: memberCount ?? this.memberCount,
       totalSpendingPaise: totalSpendingPaise ?? this.totalSpendingPaise,
       createdAt: createdAt,

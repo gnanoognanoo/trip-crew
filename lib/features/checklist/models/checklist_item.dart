@@ -36,9 +36,9 @@ class ChecklistItem {
       id: id,
       title: map['title'] as String? ?? '',
       category: map['category'] as String? ?? 'Clothes',
-      isCompleted: map['isCompleted'] as bool? ?? false,
-      assignedToMemberName: map['assignedToMemberName'] as String?,
-      assignedToUid: map['assignedToUid'] as String?,
+      isCompleted: (map['isCompleted'] ?? map['is_completed']) as bool? ?? false,
+      assignedToMemberName: (map['assignedToMemberName'] ?? map['assigned_to_name']) as String?,
+      assignedToUid: (map['assignedToUid'] ?? map['assigned_to_user_id']) as String?,
       isShared: map['isShared'] as bool? ?? true,
     );
   }

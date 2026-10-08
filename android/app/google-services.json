@@ -12,7 +12,20 @@
           "package_name": "com.example.tripcrew"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "540250477392-6h6beonbrnq4213ligkhfr89sm1undsp.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.tripcrew",
+            "certificate_hash": "8087e1cab4ebd0b19121f3b988c211c03b035899"
+          }
+        },
+        {
+          "client_id": "540250477392-b93lsaip4i32sgmimgcb54md47oiojcn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCRK0HyIN5JqbdTB0aqo3R3W93gSXnFJOE"
@@ -20,7 +33,12 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "540250477392-b93lsaip4i32sgmimgcb54md47oiojcn.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
         }
       }
     }

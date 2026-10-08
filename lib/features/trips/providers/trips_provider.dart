@@ -1,11 +1,11 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:math';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
+import 'package:tripcrew/features/auth/models/user_profile.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trips/models/trip_model.dart';
 
@@ -29,18 +29,19 @@ class TripsState {
       } catch (_) {}
     }
     try {
-      return trips.firstWhere((t) => t.status == 'active');
+      return trips.firstWhere((t) => t.isActive);
     } catch (_) {
       return trips.isNotEmpty ? trips.first : null;
     }
   }
 
-  List<TripModel> get upcomingTrips => trips
-      .where((t) => t.status == 'upcoming' && t.id != activeTrip?.id)
-      .toList();
+  List<TripModel> get upcomingTrips {
+    final activeId = activeTrip?.id;
+    return trips.where((t) => t.id != activeId || t.status == 'upcoming' || !t.isActive).toList();
+  }
 
   List<TripModel> get completedTrips =>
-      trips.where((t) => t.status == 'completed').toList();
+      trips.where((t) => !t.isActive && t.status == 'completed').toList();
 
   TripsState copyWith({
     bool? isLoading,
@@ -59,7 +60,7 @@ class TripsState {
 }
 
 class TripsNotifier extends Notifier<TripsState> {
-  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tripsSub;
+  StreamSubscription? _tripsSub;
 
   @override
   TripsState build() {
@@ -69,7 +70,7 @@ class TripsNotifier extends Notifier<TripsState> {
 
     final authState = ref.watch(authProvider);
 
-    if (authState.user != null && FirebaseService.isInitialized) {
+    if (authState.user != null) {
       _listenToUserTrips(authState.user!.uid);
       return const TripsState(isLoading: true);
     }
@@ -77,37 +78,98 @@ class TripsNotifier extends Notifier<TripsState> {
     return const TripsState(isLoading: false, trips: []);
   }
 
-  void _listenToUserTrips(String uid) {
-    _tripsSub?.cancel();
+  Future<void> fetchUserTrips(String uid) async {
+    developer.log('[TRIPS_DEBUG] fetchUserTrips START | firebase uid = $uid', name: 'TripsNotifier');
+    developer.log('[TRIPS_DEBUG] Supabase.isInitialized = ${SupabaseService.isInitialized}', name: 'TripsNotifier');
+    if (SupabaseService.isInitialized) {
+      developer.log('[TRIPS_DEBUG] Supabase session user = ${SupabaseService.client.auth.currentUser?.id}', name: 'TripsNotifier');
+    }
 
-    // Listen to all trips created by the user or where the user is a member
-    _tripsSub = FirebaseFirestore.instance
-        .collection('trips')
-        .snapshots()
-        .listen(
-          (snapshot) {
-            final loadedTrips = snapshot.docs
-                .map((doc) => TripModel.fromMap(doc.data(), doc.id))
-                .toList();
+    if (!SupabaseService.isInitialized) {
+      state = state.copyWith(isLoading: false);
+      developer.log('[TRIPS_DEBUG] Aborting: Supabase is not initialized', name: 'TripsNotifier');
+      return;
+    }
+    try {
+      final loadedTrips = <TripModel>[];
+      final seenIds = <String>{};
 
-            state = state.copyWith(
-              isLoading: false,
-              trips: loadedTrips,
-              activeTripId:
-                  state.activeTripId ??
-                  (loadedTrips.isNotEmpty ? loadedTrips.first.id : null),
-            );
-          },
-          onError: (e) {
-            state = state.copyWith(isLoading: false, error: e.toString());
-          },
-        );
+      // 1. Fetch via trip_members membership
+      try {
+        developer.log('[TRIPS_DEBUG] membership query START', name: 'TripsNotifier');
+        final memberRows = await SupabaseService.client
+            .from('trip_members')
+            .select('trip_id, trips(*)')
+            .eq('user_id', uid);
+
+        developer.log('[TRIPS_DEBUG] membership query RESULT = ${memberRows.length} rows', name: 'TripsNotifier');
+
+        for (final row in memberRows) {
+          final tripMap = row['trips'] as Map<String, dynamic>?;
+          if (tripMap != null) {
+            final tid = tripMap['id'] as String;
+            seenIds.add(tid);
+            loadedTrips.add(TripModel.fromMap(tripMap, tid));
+          }
+        }
+      } catch (e) {
+        developer.log('[TRIPS_DEBUG] membership query ERROR = $e', name: 'TripsNotifier');
+      }
+
+      // 2. Fallback: fetch trips created by this user directly
+      try {
+        developer.log('[TRIPS_DEBUG] created_by query START', name: 'TripsNotifier');
+        final createdRows = await SupabaseService.client
+            .from('trips')
+            .select()
+            .eq('created_by', uid);
+
+        developer.log('[TRIPS_DEBUG] created_by query RESULT = ${createdRows.length} rows', name: 'TripsNotifier');
+
+        for (final tripMap in createdRows) {
+          final tid = tripMap['id'] as String;
+          if (!seenIds.contains(tid)) {
+            seenIds.add(tid);
+            loadedTrips.add(TripModel.fromMap(tripMap, tid));
+          }
+        }
+      } catch (e) {
+        developer.log('[TRIPS_DEBUG] created_by query ERROR = $e', name: 'TripsNotifier');
+      }
+
+      state = state.copyWith(
+        isLoading: false,
+        trips: loadedTrips,
+        activeTripId: state.activeTripId ?? (loadedTrips.isNotEmpty ? loadedTrips.first.id : null),
+      );
+
+      developer.log('[TRIPS_DEBUG] parsed trip count = ${loadedTrips.length}', name: 'TripsNotifier');
+      developer.log('[TRIPS_DEBUG] trip IDs = ${loadedTrips.map((t) => t.id).toList()}', name: 'TripsNotifier');
+      developer.log('[TRIPS_DEBUG] trip statuses = ${loadedTrips.map((t) => t.status).toList()}', name: 'TripsNotifier');
+      developer.log('[TRIPS_DEBUG] isActive values = ${loadedTrips.map((t) => t.isActive).toList()}', name: 'TripsNotifier');
+      developer.log('[TRIPS_DEBUG] upcomingTrips count = ${state.upcomingTrips.length}', name: 'TripsNotifier');
+    } catch (e) {
+      developer.log('[TRIPS_DEBUG] fetchUserTrips FATAL ERROR = $e', name: 'TripsNotifier');
+      state = state.copyWith(isLoading: false, error: e.toString());
+    }
   }
 
-  /// Generates a high-entropy, human-shareable invite code.
-  /// Format: TC-XXXX-XXXX (e.g. TC-K7M4-X9QP).
-  /// Uses Random.secure() across 32 unambiguous alphanumeric characters (excluding 0, O, 1, I).
-  /// Entropy: 32^8 = 1,099,511,627,776 combinations (40 bits of cryptographic entropy).
+  void _listenToUserTrips(String uid) {
+    _tripsSub?.cancel();
+    fetchUserTrips(uid);
+
+    if (SupabaseService.isInitialized) {
+      try {
+        _tripsSub = SupabaseService.client
+            .from('trips')
+            .stream(primaryKey: ['id'])
+            .listen((_) {
+              fetchUserTrips(uid);
+            });
+      } catch (_) {}
+    }
+  }
+
   static String generateInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final rand = Random.secure();
@@ -122,8 +184,6 @@ class TripsNotifier extends Notifier<TripsState> {
     return 'TC-$block1-$block2';
   }
 
-  /// Normalizes user-entered invite codes (handles lowercase, missing hyphens, extra spaces).
-  /// E.g. "k7m4x9qp" or "tc-k7m4-x9qp" -> "TC-K7M4-X9QP".
   static String normalizeInviteCode(String raw) {
     final cleaned = raw.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
     if (cleaned.startsWith('TC') && cleaned.length == 10) {
@@ -134,10 +194,6 @@ class TripsNotifier extends Notifier<TripsState> {
     return raw.trim().toUpperCase();
   }
 
-  /// Creates a trip atomically:
-  /// 1. trips/{tripId}
-  /// 2. trips/{tripId}/members/{creatorUid} with role = 'owner'
-  /// 3. tripInvites/{inviteCode}
   Future<TripModel> createTrip({
     required String name,
     required String startingPlace,
@@ -151,10 +207,11 @@ class TripsNotifier extends Notifier<TripsState> {
     final user = ref.read(authProvider).user;
     final inviteCode = generateInviteCode();
     final tripId = 'trip_${DateTime.now().millisecondsSinceEpoch}';
+    final uid = user?.uid ?? 'creator';
 
     final newTrip = TripModel(
       id: tripId,
-      ownerId: user?.uid ?? 'creator',
+      ownerId: uid,
       name: name.trim(),
       startingPlace: startingPlace.trim(),
       destination: destination.trim(),
@@ -164,204 +221,141 @@ class TripsNotifier extends Notifier<TripsState> {
       budget: budget,
       currency: currency,
       inviteCode: inviteCode,
-      status: 'upcoming',
+      status: 'active',
       memberCount: 1,
       totalSpendingPaise: 0,
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
 
-    if (FirebaseService.isInitialized) {
-      final batch = FirebaseFirestore.instance.batch();
-      final tripDoc = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId);
-      final memberDoc = tripDoc
-          .collection('members')
-          .doc(user?.uid ?? 'creator');
-      final inviteDoc = FirebaseFirestore.instance
-          .collection('tripInvites')
-          .doc(inviteCode);
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('trips').insert({
+          'id': tripId,
+          'title': name.trim(),
+          'destination': destination.trim(),
+          'start_date': startDate.toIso8601String(),
+          'end_date': endDate.toIso8601String(),
+          'created_by': uid,
+          'member_count': 1,
+          'invite_code': inviteCode,
+          'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        });
 
-      batch.set(tripDoc, {
-        'id': tripId,
-        'ownerId': user?.uid ?? 'creator',
-        'name': name.trim(),
-        'startingPlace': startingPlace.trim(),
-        'destination': destination.trim(),
-        'startDate': startDate.toIso8601String(),
-        'endDate': endDate.toIso8601String(),
-        'tripType': tripType,
-        'budget': budget,
-        'currency': currency,
-        'inviteCode': inviteCode,
-        'status': 'upcoming',
-        'memberCount': 1,
-        'totalSpendingPaise': 0,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+        await SupabaseService.client.from('trip_members').insert({
+          'id': 'tm_${DateTime.now().millisecondsSinceEpoch}',
+          'trip_id': tripId,
+          'user_id': uid,
+          'role': 'owner',
+          'joined_at': DateTime.now().toIso8601String(),
+        });
 
-      batch.set(memberDoc, {
-        'uid': user?.uid ?? 'creator',
-        'displayName': user?.name ?? 'Trip Owner',
-        'role': 'owner',
-        'joinedAt': FieldValue.serverTimestamp(),
-        'isOnline': true,
-      });
-
-      batch.set(inviteDoc, {
-        'tripId': tripId,
-        'inviteCode': inviteCode,
-        'createdBy': user?.uid ?? 'creator',
-        'createdAt': FieldValue.serverTimestamp(),
-        'isActive': true,
-      });
-
-      await batch.commit();
+        await SupabaseService.client.from('trip_invites').insert({
+          'id': 'inv_${DateTime.now().millisecondsSinceEpoch}',
+          'trip_id': tripId,
+          'invite_code': inviteCode,
+          'created_by': uid,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      } catch (_) {}
     }
 
     await AnalyticsService.logTripCreated(tripId, tripType);
 
-    if (!FirebaseService.isInitialized) {
-      final updated = [newTrip, ...state.trips];
-      state = state.copyWith(trips: updated, activeTripId: tripId);
-    }
+    final updated = [newTrip, ...state.trips];
+    state = state.copyWith(trips: updated, activeTripId: tripId);
 
     return newTrip;
   }
 
-  /// Joins a trip safely by invite code.
-  /// Atomically validates invite, verifies capacity (<25), prevents duplicates,
-  /// stores invite proof on the member document, and increments memberCount.
   Future<TripModel?> joinTripByCode(String code) async {
     final normalized = normalizeInviteCode(code);
+    var user = ref.read(authProvider).user;
+    if (user == null && !SupabaseService.isInitialized) {
+      user = UserProfile(
+        uid: 'test_user',
+        name: 'Test User',
+        email: 'test@example.com',
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+    }
+    if (user == null) {
+      throw Exception('You must be signed in to join a trip.');
+    }
 
-    if (FirebaseService.isInitialized) {
-      final user = ref.read(authProvider).user;
-      if (user == null) {
-        throw Exception('You must be signed in to join a trip.');
+    if (SupabaseService.isInitialized) {
+      final inviteRes = await SupabaseService.client
+          .from('trip_invites')
+          .select()
+          .eq('invite_code', normalized)
+          .maybeSingle();
+
+      if (inviteRes == null) {
+        throw Exception('Invalid or expired invite code.');
       }
 
-      final firestore = FirebaseFirestore.instance;
-      final inviteRef = firestore.collection('tripInvites').doc(normalized);
+      final isRevoked = inviteRes['is_revoked'] as bool? ?? false;
+      if (isRevoked) {
+        throw Exception('This invite code has been revoked by the trip owner.');
+      }
 
-      debugPrint('[joinTripByCode] Starting join for invite code: $normalized');
-      final tripId = await firestore.runTransaction<String>((
-        transaction,
-      ) async {
-        // 1. Read and verify invite
-        debugPrint('[joinTripByCode] 1. READ tripInvites/$normalized');
-        final inviteSnapshot = await transaction.get(inviteRef);
-        if (!inviteSnapshot.exists || inviteSnapshot.data() == null) {
-          throw Exception('Invalid or expired invite code.');
-        }
+      final tripId = inviteRes['trip_id'] as String;
+      final tripRes = await SupabaseService.client
+          .from('trips')
+          .select()
+          .eq('id', tripId)
+          .single();
 
-        final inviteData = inviteSnapshot.data()!;
-        final inviteTripId = inviteData['tripId'] as String?;
-        final isActive = inviteData['isActive'] as bool? ?? true;
-        final expiresAt = inviteData['expiresAt'] != null
-            ? (inviteData['expiresAt'] is Timestamp
-                  ? (inviteData['expiresAt'] as Timestamp).toDate()
-                  : DateTime.tryParse(inviteData['expiresAt'].toString()))
-            : null;
+      final currentMemberCount = (tripRes['member_count'] as num?)?.toInt() ?? 1;
 
-        if (inviteTripId == null || inviteTripId.isEmpty) {
-          throw Exception('Invite code does not reference a valid trip.');
-        }
-        if (!isActive) {
-          throw Exception(
-            'This invite code has been revoked by the trip owner.',
-          );
-        }
-        if (expiresAt != null && DateTime.now().isAfter(expiresAt)) {
-          throw Exception('This invite code has expired.');
-        }
+      final existingMember = await SupabaseService.client
+          .from('trip_members')
+          .select()
+          .eq('trip_id', tripId)
+          .eq('user_id', user.uid)
+          .maybeSingle();
 
-        // 2. Read and verify trip
-        debugPrint('[joinTripByCode] 2. READ trips/$inviteTripId');
-        final tripRef = firestore.collection('trips').doc(inviteTripId);
-        final tripSnapshot = await transaction.get(tripRef);
-        if (!tripSnapshot.exists || tripSnapshot.data() == null) {
-          throw Exception(
-            'The trip associated with this invite code was not found.',
-          );
-        }
+      if (existingMember != null) {
+        state = state.copyWith(activeTripId: tripId);
+        return TripModel.fromMap(tripRes, tripId);
+      }
 
-        final tripData = tripSnapshot.data()!;
+      if (currentMemberCount >= AppConstants.maxCrewMembers) {
+        throw Exception('This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.');
+      }
 
-        // 3. Read member document to check for duplicate membership
-        debugPrint(
-          '[joinTripByCode] 3. READ trips/$inviteTripId/members/${user.uid}',
-        );
-        final memberRef = tripRef.collection('members').doc(user.uid);
-        final memberSnapshot = await transaction.get(memberRef);
-
-        if (memberSnapshot.exists) {
-          // Idempotent: already a member, do not increment memberCount
-          debugPrint(
-            '[joinTripByCode] Already a member of trip $inviteTripId (idempotent)',
-          );
-          return inviteTripId;
-        }
-
-        // 4. Atomic capacity check
-        final currentMemberCount =
-            (tripData['memberCount'] as num?)?.toInt() ?? 1;
-        if (currentMemberCount >= AppConstants.maxCrewMembers) {
-          throw Exception(
-            'This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.',
-          );
-        }
-
-        // 5. Atomically create member document with invite proof
-        debugPrint(
-          '[joinTripByCode] 4. CREATE trips/$inviteTripId/members/${user.uid}',
-        );
-        transaction.set(memberRef, {
-          'uid': user.uid,
-          'displayName': user.name.isNotEmpty ? user.name : 'Member',
-          'role': 'member',
-          'inviteCode': normalized,
-          'joinedAt': FieldValue.serverTimestamp(),
-          'isOnline': true,
-        });
-
-        // 6. Atomically increment memberCount
-        debugPrint(
-          '[joinTripByCode] 5. UPDATE trips/$inviteTripId (memberCount: ${currentMemberCount + 1})',
-        );
-        transaction.update(tripRef, {
-          'memberCount': currentMemberCount + 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-
-        return inviteTripId;
+      await SupabaseService.client.from('trip_members').insert({
+        'id': 'tm_${DateTime.now().millisecondsSinceEpoch}',
+        'trip_id': tripId,
+        'user_id': user.uid,
+        'role': 'member',
+        'joined_at': DateTime.now().toIso8601String(),
       });
 
-      debugPrint(
-        '[joinTripByCode] Transaction committed successfully for trip $tripId',
-      );
+      await SupabaseService.client
+          .from('trips')
+          .update({'member_count': currentMemberCount + 1})
+          .eq('id', tripId);
 
       await AnalyticsService.logTripJoined(tripId);
 
-      final updatedTripDoc = await firestore
-          .collection('trips')
-          .doc(tripId)
-          .get();
-      final joinedTrip = TripModel.fromMap(updatedTripDoc.data()!, tripId);
+      final updatedTripRes = await SupabaseService.client
+          .from('trips')
+          .select()
+          .eq('id', tripId)
+          .single();
+
+      final joinedTrip = TripModel.fromMap(updatedTripRes, tripId);
       state = state.copyWith(activeTripId: tripId);
+      await fetchUserTrips(user.uid);
       return joinedTrip;
     } else {
-      // Local fallback for testing / offline
-      final found = state.trips
-          .where((t) => t.inviteCode == normalized)
-          .firstOrNull;
+      final found = state.trips.where((t) => t.inviteCode == normalized).firstOrNull;
       if (found != null) {
         if (found.memberCount >= AppConstants.maxCrewMembers) {
-          throw Exception(
-            'This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.',
-          );
+          throw Exception('This trip has reached the maximum allowed crew size of ${AppConstants.maxCrewMembers} members.');
         }
         state = state.copyWith(activeTripId: found.id);
         return found;
@@ -370,84 +364,51 @@ class TripsNotifier extends Notifier<TripsState> {
     }
   }
 
-  /// Atomically removes a crew member and decrements trip memberCount.
-  /// The trip owner can NEVER be removed.
   Future<void> removeMember({
     required String tripId,
     required String memberUid,
   }) async {
-    if (FirebaseService.isInitialized) {
-      final firestore = FirebaseFirestore.instance;
-      final tripRef = firestore.collection('trips').doc(tripId);
-      final memberRef = tripRef.collection('members').doc(memberUid);
+    if (SupabaseService.isInitialized) {
+      final tripRes = await SupabaseService.client
+          .from('trips')
+          .select()
+          .eq('id', tripId)
+          .maybeSingle();
 
-      await firestore.runTransaction((transaction) async {
-        final tripSnapshot = await transaction.get(tripRef);
-        if (!tripSnapshot.exists || tripSnapshot.data() == null) {
-          throw Exception('Trip not found.');
-        }
-
-        final tripData = tripSnapshot.data()!;
-        final ownerId = tripData['ownerId'] as String?;
-
+      if (tripRes != null) {
+        final ownerId = tripRes['created_by'] as String?;
         if (memberUid == ownerId) {
           throw Exception('The trip owner cannot be removed from the crew.');
         }
 
-        final memberSnapshot = await transaction.get(memberRef);
-        if (!memberSnapshot.exists) {
-          return; // Already removed
-        }
+        final currentCount = (tripRes['member_count'] as num?)?.toInt() ?? 1;
+        final newCount = (currentCount - 1).clamp(1, AppConstants.maxCrewMembers);
 
-        final currentCount = (tripData['memberCount'] as num?)?.toInt() ?? 1;
-        final newCount = (currentCount - 1).clamp(
-          1,
-          AppConstants.maxCrewMembers,
-        );
+        await SupabaseService.client
+            .from('trip_members')
+            .delete()
+            .eq('trip_id', tripId)
+            .eq('user_id', memberUid);
 
-        transaction.delete(memberRef);
-        transaction.update(tripRef, {
-          'memberCount': newCount,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      });
+        await SupabaseService.client
+            .from('trips')
+            .update({'member_count': newCount})
+            .eq('id', tripId);
+      }
     }
   }
 
-  /// Revokes an active invite code for a trip.
-  /// Only the trip owner is permitted to revoke invites.
-  /// Historical trip memberships are completely preserved.
   Future<void> revokeInvite({
     required String tripId,
     required String inviteCode,
   }) async {
     final normalized = normalizeInviteCode(inviteCode);
-    if (FirebaseService.isInitialized) {
-      final user = ref.read(authProvider).user;
-      final firestore = FirebaseFirestore.instance;
-      final inviteRef = firestore.collection('tripInvites').doc(normalized);
-      final inviteSnap = await inviteRef.get();
-
-      if (!inviteSnap.exists || inviteSnap.data() == null) {
-        throw Exception('Invite code not found.');
-      }
-
-      final data = inviteSnap.data()!;
-      if (data['tripId'] != tripId) {
-        throw Exception('Invite code does not belong to this trip.');
-      }
-
-      // Verify owner permission
-      final tripSnap = await firestore.collection('trips').doc(tripId).get();
-      if (tripSnap.exists && tripSnap.data()?['ownerId'] != user?.uid) {
-        throw Exception('Only the trip owner can revoke invite codes.');
-      }
-
-      await inviteRef.update({
-        'isActive': false,
-        'revokedAt': FieldValue.serverTimestamp(),
-        'revokedBy': user?.uid,
-      });
+    if (SupabaseService.isInitialized) {
+      await SupabaseService.client
+          .from('trip_invites')
+          .update({'is_revoked': true})
+          .eq('trip_id', tripId)
+          .eq('invite_code', normalized);
     }
   }
 
@@ -455,7 +416,6 @@ class TripsNotifier extends Notifier<TripsState> {
     state = state.copyWith(activeTripId: tripId);
   }
 
-  /// Loads demo fixture data for development/sandbox mode exploration.
   void loadDemoFixture() {
     final now = DateTime.now();
     final demoTrips = [

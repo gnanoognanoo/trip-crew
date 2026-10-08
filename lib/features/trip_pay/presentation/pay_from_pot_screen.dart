@@ -9,8 +9,8 @@ import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trip_pay/providers/trip_pay_notifier.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen for paying from the shared Trip Pot.
-/// Streamlined fast payment flow with inline review and dedicated Success Screen.
+/// Screen for paying directly from the shared Trip Pot ("Pay From Pot").
+/// Enforces balance validation and atomic Firestore transaction updates.
 class PayFromPotScreen extends ConsumerStatefulWidget {
   const PayFromPotScreen({super.key});
 
@@ -19,16 +19,18 @@ class PayFromPotScreen extends ConsumerStatefulWidget {
 }
 
 class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
-  final _amountController = TextEditingController();
-  final _descriptionController = TextEditingController();
   final _merchantController = TextEditingController();
+  final _amountController = TextEditingController();
+  final _notesController = TextEditingController();
   String _category = 'Food';
   String? _clientRequestId;
 
-  // Track payment success state to render dedicated success screen
+  // Track payment success state to render confirmation view
   bool _paymentSuccess = false;
   int _lastPaidAmountPaise = 0;
-  String _lastPaidDescription = '';
+  String _lastPaidNotes = '';
+  String _lastPaidMerchant = '';
+  String _lastPaidCategory = '';
   String _lastPaidTripName = '';
   String _lastPaidInitiator = '';
   int _remainingPotPaise = 0;
@@ -56,9 +58,9 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
 
   @override
   void dispose() {
-    _amountController.dispose();
-    _descriptionController.dispose();
     _merchantController.dispose();
+    _amountController.dispose();
+    _notesController.dispose();
     super.dispose();
   }
 
@@ -69,8 +71,15 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
 
   Future<void> _submitPayment() async {
     final amountPaise = _amountPaise;
-    final description = _descriptionController.text.trim();
     final merchant = _merchantController.text.trim();
+    final notes = _notesController.text.trim();
+
+    if (merchant.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter merchant name.')),
+      );
+      return;
+    }
 
     if (amountPaise <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -79,10 +88,10 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
       return;
     }
 
-    if (description.isEmpty) {
+    if (notes.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please enter a description (e.g. Dinner, Fuel).'),
+          content: Text('Please enter notes or description.'),
         ),
       );
       return;
@@ -91,7 +100,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
     if (!FirebaseService.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('TripCrew Pay requires an internet connection.'),
+          content: Text('TripCrew Pay requires an active connection.'),
         ),
       );
       return;
@@ -103,10 +112,16 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
     final summary = ref.read(tripPayProvider).summary;
     final available = summary?.availableBalancePaise ?? 0;
 
+    // Validate sufficient Trip Pot balance
     if (amountPaise > available) {
       AnalyticsService.logInsufficientBalanceShown(activeTrip.id);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Insufficient Trip Pot balance.')),
+        SnackBar(
+          content: Text(
+            'Insufficient Trip Pot balance. Available: ${CurrencyFormatter.formatUnits(available)}',
+          ),
+          backgroundColor: Colors.red.shade800,
+        ),
       );
       return;
     }
@@ -116,14 +131,15 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
         ? currentUser!.name
         : 'Crew Member';
 
+    // Execute atomic Firestore transaction & update Riverpod state
     final success = await ref
         .read(tripPayProvider.notifier)
         .makePayment(
           tripId: activeTrip.id,
           amountPaise: amountPaise,
-          description: description,
+          description: notes,
           category: _category,
-          merchantName: merchant.isNotEmpty ? merchant : null,
+          merchantName: merchant,
           clientRequestId: _clientRequestId!,
         );
 
@@ -133,7 +149,9 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
         setState(() {
           _paymentSuccess = true;
           _lastPaidAmountPaise = amountPaise;
-          _lastPaidDescription = description;
+          _lastPaidNotes = notes;
+          _lastPaidMerchant = merchant;
+          _lastPaidCategory = _category;
           _lastPaidTripName = activeTrip.name;
           _lastPaidInitiator = initiatorName;
           _remainingPotPaise = available - amountPaise;
@@ -165,7 +183,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Pay from Trip Pot'),
+        title: const Text('Pay From Pot'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
@@ -179,29 +197,29 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
             children: [
               const SizedBox(height: AppConstants.spaceSm),
 
-              // Sandbox Banner
+              // Mode Banner
               Container(
                 padding: const EdgeInsets.all(AppConstants.spaceMd),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
+                  color: const Color(0xFFEFF6FF),
                   borderRadius: BorderRadius.circular(AppConstants.radiusMd),
-                  border: Border.all(color: const Color(0xFFF59E0B)),
+                  border: Border.all(color: const Color(0xFF3B82F6)),
                 ),
                 child: const Row(
                   children: [
                     Icon(
-                      Icons.shield_outlined,
-                      color: Color(0xFFB45309),
+                      Icons.account_balance_wallet_outlined,
+                      color: Color(0xFF1D4ED8),
                       size: 18,
                     ),
                     SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'SANDBOX • No real money is transferred.',
+                        'PAY FROM POT • Deducts directly from pooled Trip Pot balance.',
                         style: TextStyle(
                           fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF92400E),
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1E40AF),
                         ),
                       ),
                     ),
@@ -222,7 +240,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Trip Pot Balance',
+                            'Available Trip Pot Balance',
                             style: TextStyle(
                               color: Colors.white70,
                               fontWeight: FontWeight.w600,
@@ -253,7 +271,20 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
               ),
               const SizedBox(height: AppConstants.spaceMd),
 
-              // Inputs
+              // 1. Merchant Name Field
+              TextField(
+                controller: _merchantController,
+                enabled: !tripPayState.isProcessing,
+                decoration: const InputDecoration(
+                  labelText: 'Merchant Name',
+                  hintText: 'e.g. Highway Diner, Beach Shack, BPCL Fuel',
+                  prefixIcon: Icon(Icons.store_rounded),
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: AppConstants.spaceMd),
+
+              // 2. Amount Field
               TextField(
                 controller: _amountController,
                 keyboardType: const TextInputType.numberWithOptions(
@@ -264,37 +295,13 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                   labelText: 'Amount (₹)',
                   prefixText: '₹ ',
                   border: OutlineInputBorder(),
-                  hintText: 'e.g. 1200',
+                  hintText: 'e.g. 1500',
                 ),
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: AppConstants.spaceMd),
 
-              TextField(
-                controller: _descriptionController,
-                enabled: !tripPayState.isProcessing,
-                decoration: const InputDecoration(
-                  labelText: 'What is this for?',
-                  hintText: 'e.g. Dinner, Fuel, Tickets',
-                  prefixIcon: Icon(Icons.description_rounded),
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: AppConstants.spaceMd),
-
-              TextField(
-                controller: _merchantController,
-                enabled: !tripPayState.isProcessing,
-                decoration: const InputDecoration(
-                  labelText: 'Merchant / Place (optional)',
-                  hintText: 'e.g. Beach Shack, Highway Petrol Bunk',
-                  prefixIcon: Icon(Icons.store_rounded),
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: AppConstants.spaceMd),
-
+              // 3. Category Dropdown
               DropdownButtonFormField<String>(
                 initialValue: _category,
                 decoration: const InputDecoration(
@@ -309,9 +316,23 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                     ? null
                     : (val) => setState(() => _category = val!),
               ),
+              const SizedBox(height: AppConstants.spaceMd),
+
+              // 4. Notes Field
+              TextField(
+                controller: _notesController,
+                enabled: !tripPayState.isProcessing,
+                decoration: const InputDecoration(
+                  labelText: 'Notes',
+                  hintText: 'e.g. Dinner for crew, Diesel fill-up',
+                  prefixIcon: Icon(Icons.notes_rounded),
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
               const SizedBox(height: AppConstants.spaceLg),
 
-              // Review Section
+              // Payment Review Box
               Container(
                 padding: const EdgeInsets.all(AppConstants.spaceMd),
                 decoration: BoxDecoration(
@@ -323,7 +344,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'PAYMENT REVIEW',
+                      'PAYMENT SUMMARY',
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w800,
@@ -333,12 +354,18 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                     ),
                     const SizedBox(height: 8),
                     _reviewRow(
-                      'Amount',
+                      'Amount to deduct',
                       CurrencyFormatter.formatUnits(_amountPaise),
                     ),
                     _reviewRow(
                       'Available balance',
                       CurrencyFormatter.formatUnits(available),
+                    ),
+                    _reviewRow(
+                      'Remaining after payment',
+                      CurrencyFormatter.formatUnits(
+                        available >= _amountPaise ? available - _amountPaise : 0,
+                      ),
                     ),
                     _reviewRow('Initiated by', initiatorName),
                   ],
@@ -346,7 +373,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
               ),
               const SizedBox(height: AppConstants.spaceLg),
 
-              // Confirm Sandbox Payment Button
+              // Submit Button
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
@@ -365,7 +392,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                           ),
                         )
                       : const Text(
-                          'Confirm Sandbox Payment',
+                          'Confirm & Pay From Pot',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w800,
@@ -397,14 +424,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
     );
   }
 
-  /// Dedicated Success Screen matching Item 6 specification:
-  /// Payment Recorded ✓
-  /// ₹1,200
-  /// Dinner
-  /// Paid from Goa Trip Pot
-  /// Initiated by: Account A
-  /// Remaining Trip Pot: ₹18,800
-  /// [Done]
+  /// Success View rendered after atomic Firestore transaction succeeds
   Widget _buildSuccessScreen() {
     return Scaffold(
       body: SafeArea(
@@ -415,7 +435,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
             children: [
               const Spacer(),
 
-              // Success Icon
+              // Success Checkmark
               Container(
                 padding: const EdgeInsets.all(20),
                 decoration: const BoxDecoration(
@@ -451,17 +471,27 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
               const SizedBox(height: 4),
 
               Text(
-                _lastPaidDescription,
+                _lastPaidMerchant.isNotEmpty
+                    ? 'Paid to $_lastPaidMerchant'
+                    : _lastPaidNotes,
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w700,
                   color: Colors.black87,
                 ),
               ),
+              const SizedBox(height: 4),
+              Text(
+                'Category: $_lastPaidCategory • Note: $_lastPaidNotes',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey,
+                ),
+              ),
               const SizedBox(height: 8),
 
               Text(
-                'Paid from $_lastPaidTripName Pot',
+                'Deducted from $_lastPaidTripName Pot',
                 style: const TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
@@ -516,28 +546,6 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
                       ],
                     ),
                   ],
-                ),
-              ),
-              const SizedBox(height: AppConstants.spaceMd),
-
-              // Sandbox note
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 6,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'SANDBOX MODE • Simulated group payment. No real money was moved.',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF92400E),
-                  ),
-                  textAlign: TextAlign.center,
                 ),
               ),
 

@@ -10,6 +10,7 @@ class TripPaySummary {
   final int totalContributedPaise;
   final int totalSpentPaise;
   final int availableBalancePaise;
+  final bool isSettled;
   final DateTime updatedAt;
 
   const TripPaySummary({
@@ -18,6 +19,7 @@ class TripPaySummary {
     this.totalContributedPaise = 0,
     this.totalSpentPaise = 0,
     this.availableBalancePaise = 0,
+    this.isSettled = false,
     required this.updatedAt,
   });
 
@@ -28,22 +30,27 @@ class TripPaySummary {
       'totalContributedPaise': totalContributedPaise,
       'totalSpentPaise': totalSpentPaise,
       'availableBalancePaise': availableBalancePaise,
+      'isSettled': isSettled,
       'updatedAt': updatedAt.toIso8601String(),
     };
   }
 
   factory TripPaySummary.fromMap(Map<String, dynamic> map) {
     return TripPaySummary(
-      tripId: map['tripId'] as String? ?? '',
+      tripId: (map['tripId'] ?? map['trip_id']) as String? ?? '',
       currency: map['currency'] as String? ?? 'INR',
       totalContributedPaise:
-          (map['totalContributedPaise'] as num?)?.toInt() ?? 0,
-      totalSpentPaise: (map['totalSpentPaise'] as num?)?.toInt() ?? 0,
+          ((map['totalContributedPaise'] ?? map['total_contributed_paise']) as num?)?.toInt() ?? 0,
+      totalSpentPaise:
+          ((map['totalSpentPaise'] ?? map['total_spent_paise']) as num?)?.toInt() ?? 0,
       availableBalancePaise:
-          (map['availableBalancePaise'] as num?)?.toInt() ?? 0,
+          ((map['availableBalancePaise'] ?? map['available_balance_paise']) as num?)?.toInt() ?? 0,
+      isSettled: (map['isSettled'] ?? map['is_settled']) as bool? ?? false,
       updatedAt: map['updatedAt'] != null
           ? DateTime.tryParse(map['updatedAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (map['updated_at'] != null
+              ? DateTime.tryParse(map['updated_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
     );
   }
 
@@ -56,6 +63,7 @@ class TripPaySummary {
     int? totalContributedPaise,
     int? totalSpentPaise,
     int? availableBalancePaise,
+    bool? isSettled,
     DateTime? updatedAt,
   }) {
     return TripPaySummary(
@@ -66,6 +74,7 @@ class TripPaySummary {
       totalSpentPaise: totalSpentPaise ?? this.totalSpentPaise,
       availableBalancePaise:
           availableBalancePaise ?? this.availableBalancePaise,
+      isSettled: isSettled ?? this.isSettled,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }

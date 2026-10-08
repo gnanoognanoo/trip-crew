@@ -1,31 +1,33 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:developer' as developer;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
+import 'package:tripcrew/features/trip_pay/models/settlement_model.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_summary.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_transaction.dart';
 import 'package:tripcrew/features/trip_pay/providers/payment_provider.dart';
 import 'package:tripcrew/features/trip_pay/providers/sandbox_payment_provider.dart';
 import 'package:tripcrew/features/trip_pay/providers/sandbox_trip_pay_provider.dart';
-import 'package:tripcrew/features/trip_pay/providers/setu_payment_provider.dart';
+import 'package:tripcrew/features/trip_pay/providers/razorpay_payment_provider.dart';
 import 'package:tripcrew/features/trip_pay/providers/shared_pot_provider.dart';
 import 'package:tripcrew/features/trip_pay/services/trusted_payment_service.dart';
+import 'package:tripcrew/features/trip_pay/services/trip_settlement_service.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
 /// Supported payment provider engines.
 enum PaymentProviderType {
   sandbox,
-  setu;
+  razorpay;
 
   String get displayName {
     switch (this) {
       case PaymentProviderType.sandbox:
         return 'Sandbox Simulator';
-      case PaymentProviderType.setu:
-        return 'Setu UPI UAT';
+      case PaymentProviderType.razorpay:
+        return 'Razorpay Integration';
     }
   }
 }
@@ -124,6 +126,17 @@ class TripPayState {
     );
   }
 
+  /// Dynamic settlement plan computed for current trip state.
+  SettlementPlan get settlementPlan {
+    final service = TripSettlementService();
+    return service.buildSettlementPlan(
+      tripId: summary?.tripId ?? '',
+      memberNames: memberNames,
+      transactions: transactions,
+      summary: summary,
+    );
+  }
+
   /// Transactions filtered by the active filter.
   List<TripPayTransaction> filteredTransactions(String? currentUid) {
     switch (activeFilter) {
@@ -210,8 +223,8 @@ class PaymentProviderTypeNotifier extends Notifier<PaymentProviderType> {
       'PAYMENT_PROVIDER',
       defaultValue: 'sandbox',
     );
-    if (env.toLowerCase() == 'setu') {
-      return PaymentProviderType.setu;
+    if (env.toLowerCase() == 'razorpay') {
+      return PaymentProviderType.razorpay;
     }
     return PaymentProviderType.sandbox;
   }
@@ -234,27 +247,36 @@ class TripPayNotifier extends Notifier<TripPayState> {
   StreamSubscription? _membersSub;
   StreamSubscription? _attemptsSub;
 
-  late final SandboxTripPayProvider _provider;
+  final SandboxTripPayProvider _provider = SandboxTripPayProvider();
   late PaymentProvider _paymentProvider;
   late TrustedPaymentService _trustedPaymentService;
   late SharedPotProvider _sharedPotProvider;
+  late TripSettlementService _settlementService;
 
   PaymentProvider get paymentProvider => _paymentProvider;
   SharedPotProvider get sharedPotProvider => _sharedPotProvider;
   TrustedPaymentService get trustedPaymentService => _trustedPaymentService;
+  TripSettlementService get settlementService => _settlementService;
 
   @override
   TripPayState build() {
     final providerType = ref.watch(paymentProviderTypeProvider);
-    _provider = SandboxTripPayProvider();
 
-    if (providerType == PaymentProviderType.setu) {
+    if (providerType == PaymentProviderType.razorpay) {
       const backendUrl = String.fromEnvironment(
         'TRIPCREW_BACKEND_URL',
+        defaultValue: 'https://trip-creww-production.up.railway.app',
+      );
+      const verifyUrl = String.fromEnvironment(
+        'TRIPCREW_VERIFY_URL',
         defaultValue: '',
       );
-      _paymentProvider = SetuPaymentProvider(
-        backendBaseUrl: backendUrl.isNotEmpty ? backendUrl : null,
+      final defaultSupabaseVerifyUrl =
+          '${SupabaseService.defaultUrl.replaceAll(RegExp(r'/$'), '')}/functions/v1/razorpay-verify';
+
+      _paymentProvider = RazorpayPaymentProvider(
+        backendBaseUrl: backendUrl.isNotEmpty ? backendUrl : 'https://trip-creww-production.up.railway.app',
+        verificationUrl: verifyUrl.isNotEmpty ? verifyUrl : defaultSupabaseVerifyUrl,
       );
     } else {
       _paymentProvider = SandboxPaymentProvider();
@@ -264,6 +286,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
       paymentProvider: _paymentProvider,
     );
     _sharedPotProvider = SandboxSharedPotProvider(innerProvider: _provider);
+    _settlementService = TripSettlementService();
 
     ref.onDispose(() {
       _summarySub?.cancel();
@@ -273,7 +296,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
     });
 
     final activeTrip = ref.watch(activeTripProvider);
-    if (activeTrip != null && FirebaseService.isInitialized) {
+    if (activeTrip != null) {
       _listenToTripPay(activeTrip.id);
       return TripPayState(isLoading: true, providerType: providerType);
     }
@@ -284,90 +307,152 @@ class TripPayNotifier extends Notifier<TripPayState> {
     ref.read(paymentProviderTypeProvider.notifier).setType(type);
   }
 
+  Future<void> fetchTripPay(String tripId) async {
+    final currentUid = ref.read(authProvider).user?.uid;
+    developer.log('[TRIPPAY_DEBUG] fetchTripPay START | tripId = $tripId | current user = $currentUid', name: 'TripPayNotifier');
+    developer.log('[TRIPPAY_DEBUG] Supabase.isInitialized = ${SupabaseService.isInitialized}', name: 'TripPayNotifier');
+
+    if (!SupabaseService.isInitialized) {
+      state = state.copyWith(isLoading: false);
+      developer.log('[TRIPPAY_DEBUG] Aborting: Supabase is not initialized', name: 'TripPayNotifier');
+      return;
+    }
+    try {
+      // 1. Fetch Summary
+      developer.log('[TRIPPAY_DEBUG] summary query START', name: 'TripPayNotifier');
+      final summaryRes = await SupabaseService.client
+          .from('trip_pay_summary')
+          .select()
+          .eq('trip_id', tripId)
+          .maybeSingle();
+
+      developer.log('[TRIPPAY_DEBUG] summary query RESULT = $summaryRes', name: 'TripPayNotifier');
+
+      final summary = summaryRes != null
+          ? TripPaySummary.fromMap(Map<String, dynamic>.from(summaryRes))
+          : TripPaySummary.empty(tripId);
+
+      // 2. Fetch Transactions
+      developer.log('[TRIPPAY_DEBUG] transactions query START', name: 'TripPayNotifier');
+      final txRes = await SupabaseService.client
+          .from('transactions')
+          .select()
+          .eq('trip_id', tripId)
+          .order('created_at', ascending: false);
+
+      developer.log('[TRIPPAY_DEBUG] transactions query RESULT = ${txRes.length} rows', name: 'TripPayNotifier');
+
+      final txList = txRes
+          .map((m) => TripPayTransaction.fromMap(Map<String, dynamic>.from(m), m['id'] as String))
+          .toList();
+
+      // 3. Fetch Trip Members & Profiles (Safe 2-step fetch without unconstrained join)
+      final names = <String, String>{};
+      try {
+        developer.log('[TRIPPAY_DEBUG] trip_members query START', name: 'TripPayNotifier');
+        final membersRes = await SupabaseService.client
+            .from('trip_members')
+            .select('user_id, role')
+            .eq('trip_id', tripId);
+
+        developer.log('[TRIPPAY_DEBUG] trip_members RESULT = ${membersRes.length} rows', name: 'TripPayNotifier');
+
+        final uids = membersRes.map((m) => m['user_id'] as String).toList();
+        if (uids.isNotEmpty) {
+          try {
+            developer.log('[TRIPPAY_DEBUG] profiles query START', name: 'TripPayNotifier');
+            final profilesRes = await SupabaseService.client
+                .from('profiles')
+                .select('id, display_name, full_name')
+                .inFilter('id', uids);
+
+            developer.log('[TRIPPAY_DEBUG] profiles RESULT = ${profilesRes.length} rows', name: 'TripPayNotifier');
+
+            for (final p in profilesRes) {
+              final pid = p['id'] as String;
+              final dName = p['display_name'] as String? ?? p['full_name'] as String? ?? 'Member';
+              names[pid] = dName;
+            }
+          } catch (pe) {
+            developer.log('[TRIPPAY_DEBUG] profiles ERROR = $pe', name: 'TripPayNotifier');
+          }
+        }
+        for (final u in uids) {
+          names.putIfAbsent(u, () => 'Member');
+        }
+      } catch (me) {
+        developer.log('[TRIPPAY_DEBUG] trip_members ERROR = $me', name: 'TripPayNotifier');
+      }
+
+      // 4. Fetch Payment Attempts
+      List<PaymentAttempt> attempts = [];
+      if (currentUid != null) {
+        try {
+          final attRes = await SupabaseService.client
+              .from('payment_attempts')
+              .select()
+              .eq('trip_id', tripId)
+              .eq('user_id', currentUid)
+              .order('created_at', ascending: false);
+
+          attempts = attRes
+              .map((m) => PaymentAttempt.fromMap(Map<String, dynamic>.from(m), m['id'] as String))
+              .toList();
+        } catch (_) {}
+      }
+
+      state = state.copyWith(
+        isLoading: false,
+        summary: summary,
+        transactions: txList,
+        memberNames: names,
+        paymentAttempts: attempts,
+      );
+
+      developer.log('[TRIPPAY_DEBUG] fetchTripPay END | final isLoading = ${state.isLoading} | summary balance = ${summary.availableBalancePaise}', name: 'TripPayNotifier');
+    } catch (e) {
+      developer.log('[TRIPPAY_DEBUG] fetchTripPay FATAL ERROR = $e', name: 'TripPayNotifier');
+      state = state.copyWith(
+        isLoading: false,
+        summary: TripPaySummary.empty(tripId),
+        error: e.toString(),
+      );
+    }
+  }
+
   void _listenToTripPay(String tripId) {
     _summarySub?.cancel();
     _transactionsSub?.cancel();
-    _membersSub?.cancel();
-    _attemptsSub?.cancel();
 
-    final firestore = FirebaseFirestore.instance;
-    final currentUid = ref.read(authProvider).user?.uid;
+    fetchTripPay(tripId);
 
-    // Listen to summary
-    _summarySub = firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('tripPay')
-        .doc('summary')
-        .snapshots()
-        .listen(
-          (snap) {
-            if (snap.exists && snap.data() != null) {
-              final summary = TripPaySummary.fromMap(snap.data()!);
+    if (SupabaseService.isInitialized) {
+      try {
+        _summarySub = SupabaseService.client
+            .from('trip_pay_summary')
+            .stream(primaryKey: ['trip_id'])
+            .eq('trip_id', tripId)
+            .listen((data) {
+              final summary = data.isNotEmpty
+                  ? TripPaySummary.fromMap(Map<String, dynamic>.from(data.first))
+                  : TripPaySummary.empty(tripId);
               state = state.copyWith(summary: summary, isLoading: false);
-            } else {
-              state = state.copyWith(
-                summary: TripPaySummary.empty(tripId),
-                isLoading: false,
-              );
-            }
-          },
-          onError: (e) {
-            state = state.copyWith(
-              error: 'Could not sync Trip Pot. Check your connection.',
-              isLoading: false,
-            );
-          },
-        );
+            });
 
-    // Listen to transactions
-    _transactionsSub = firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('transactions')
-        .orderBy('createdAt', descending: true)
-        .snapshots()
-        .listen(
-          (snap) {
-            final txList = snap.docs
-                .map((doc) => TripPayTransaction.fromMap(doc.data(), doc.id))
-                .toList();
-            state = state.copyWith(transactions: txList);
-          },
-          onError: (e) {
-            state = state.copyWith(error: 'Could not sync transactions.');
-          },
-        );
-
-    // Listen to members
-    _membersSub = firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('members')
-        .snapshots()
-        .listen((snap) {
-          final names = <String, String>{};
-          for (final doc in snap.docs) {
-            names[doc.id] = doc.data()['displayName'] as String? ?? 'Member';
-          }
-          state = state.copyWith(memberNames: names);
-        }, onError: (_) {});
-
-    // Listen to payment attempts for the current user
-    if (currentUid != null) {
-      _attemptsSub = firestore
-          .collection('trips')
-          .doc(tripId)
-          .collection('paymentAttempts')
-          .where('uid', isEqualTo: currentUid)
-          .snapshots()
-          .listen((snap) {
-            final attempts = snap.docs
-                .map((d) => PaymentAttempt.fromMap(d.data(), d.id))
-                .toList();
-            attempts.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-            state = state.copyWith(paymentAttempts: attempts);
-          }, onError: (_) {});
+        _transactionsSub = SupabaseService.client
+            .from('transactions')
+            .stream(primaryKey: ['id'])
+            .eq('trip_id', tripId)
+            .listen((data) {
+              final txList = data
+                  .map((m) => TripPayTransaction.fromMap(Map<String, dynamic>.from(m), m['id'] as String))
+                  .toList();
+              txList.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+              state = state.copyWith(transactions: txList, isLoading: false);
+            });
+      } catch (_) {
+        state = state.copyWith(isLoading: false);
+      }
     }
   }
 
@@ -395,7 +480,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
       state = state.copyWith(isProcessing: false);
       return intent;
     } catch (e) {
-      final errorMsg = e is SetuUnconfiguredException
+      final errorMsg = e is RazorpayUnconfiguredException
           ? e.message
           : e
                 .toString()
@@ -407,7 +492,6 @@ class TripPayNotifier extends Notifier<TripPayState> {
   }
 
   /// Step 2: Verifies payment with trusted backend and atomically updates Trip Pot balance.
-  /// ONLY verified success updates the balance and records an immutable ledger transaction.
   Future<bool> verifyAndFinalizeContribution({
     required String tripId,
     required String paymentAttemptId,
@@ -424,6 +508,9 @@ class TripPayNotifier extends Notifier<TripPayState> {
         providerReference: providerReference,
         initiatedByName: user.name,
       );
+      if (tx != null) {
+        await fetchTripPay(tripId);
+      }
       state = state.copyWith(isProcessing: false);
       return tx != null;
     } catch (e) {
@@ -449,7 +536,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
     } catch (_) {}
   }
 
-  /// Adds a contribution to the Trip Pot (legacy / direct wrapper for tests).
+  /// Adds a contribution to the Trip Pot.
   Future<bool> addContribution({
     required String tripId,
     required int amountPaise,
@@ -489,7 +576,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
     }
   }
 
-  /// Initiates a payment from the Trip Pot (Layer B spending via SharedPotProvider).
+  /// Initiates a payment from the Trip Pot.
   Future<bool> makePayment({
     required String tripId,
     required int amountPaise,
@@ -546,6 +633,31 @@ class TripPayNotifier extends Notifier<TripPayState> {
       );
       state = state.copyWith(isProcessing: false);
       return true;
+    } catch (e) {
+      state = state.copyWith(
+        isProcessing: false,
+        error: e.toString().replaceAll('Exception: ', ''),
+      );
+      return false;
+    }
+  }
+
+  /// Executes atomic settlement for the active trip on Firestore.
+  Future<bool> executeSettlement({required String tripId}) async {
+    final user = ref.read(authProvider).user;
+    if (user == null) return false;
+
+    state = state.copyWith(isProcessing: true, clearError: true);
+    try {
+      final plan = state.settlementPlan;
+      final success = await _settlementService.executeAtomicSettlement(
+        tripId: tripId,
+        plan: plan,
+        initiatedByUid: user.uid,
+        initiatedByName: user.name,
+      );
+      state = state.copyWith(isProcessing: false);
+      return success;
     } catch (e) {
       state = state.copyWith(
         isProcessing: false,

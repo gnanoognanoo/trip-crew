@@ -2,6 +2,7 @@
 enum TripPayTransactionType {
   contribution,
   payment,
+  expense,
   refund,
   adjustment;
 
@@ -10,7 +11,8 @@ enum TripPayTransactionType {
       case TripPayTransactionType.contribution:
         return 'Contribution';
       case TripPayTransactionType.payment:
-        return 'Payment';
+      case TripPayTransactionType.expense:
+        return 'Expense';
       case TripPayTransactionType.refund:
         return 'Refund';
       case TripPayTransactionType.adjustment:
@@ -24,6 +26,8 @@ enum TripPayTransactionType {
         return TripPayTransactionType.contribution;
       case 'payment':
         return TripPayTransactionType.payment;
+      case 'expense':
+        return TripPayTransactionType.expense;
       case 'refund':
         return TripPayTransactionType.refund;
       case 'adjustment':
@@ -142,7 +146,9 @@ class TripPayTransaction {
       type == TripPayTransactionType.refund;
 
   /// Whether this transaction removes money from the pot.
-  bool get isDebit => type == TripPayTransactionType.payment;
+  bool get isDebit =>
+      type == TripPayTransactionType.payment ||
+      type == TripPayTransactionType.expense;
 
   double get amountRupees => amountPaise / 100.0;
 
@@ -150,7 +156,7 @@ class TripPayTransaction {
     return {
       'id': id,
       'tripId': tripId,
-      'type': type.name,
+      'type': type == TripPayTransactionType.expense ? 'expense' : type.name,
       'amountPaise': amountPaise,
       'currency': currency,
       'initiatedByUid': initiatedByUid,
@@ -175,33 +181,35 @@ class TripPayTransaction {
   factory TripPayTransaction.fromMap(Map<String, dynamic> map, String id) {
     return TripPayTransaction(
       id: id,
-      tripId: map['tripId'] as String? ?? '',
+      tripId: (map['tripId'] ?? map['trip_id']) as String? ?? '',
       type: TripPayTransactionType.fromString(
-        map['type'] as String? ?? 'payment',
+        map['type'] as String? ?? 'expense',
       ),
-      amountPaise: (map['amountPaise'] as num?)?.toInt() ?? 0,
+      amountPaise: ((map['amountPaise'] ?? map['amount_paise']) as num?)?.toInt() ?? 0,
       currency: map['currency'] as String? ?? 'INR',
-      initiatedByUid: map['initiatedByUid'] as String? ?? '',
-      initiatedByName: map['initiatedByName'] as String? ?? 'Member',
+      initiatedByUid: (map['initiatedByUid'] ?? map['initiated_by_user_id']) as String? ?? '',
+      initiatedByName: (map['initiatedByName'] ?? map['initiated_by_name']) as String? ?? 'Member',
       category: map['category'] as String? ?? 'General',
       description: map['description'] as String? ?? '',
-      merchantName: map['merchantName'] as String?,
+      merchantName: (map['merchantName'] ?? map['merchant_name']) as String?,
       status: TripPayTransactionStatus.fromString(
         map['status'] as String? ?? 'pending',
       ),
       createdAt: map['createdAt'] != null
           ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
-      balanceBeforePaise: (map['balanceBeforePaise'] as num?)?.toInt() ?? 0,
-      balanceAfterPaise: (map['balanceAfterPaise'] as num?)?.toInt() ?? 0,
-      relatedExpenseId: map['relatedExpenseId'] as String?,
-      relatedTransactionId: map['relatedTransactionId'] as String?,
+          : (map['created_at'] != null
+              ? DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
+      balanceBeforePaise: ((map['balanceBeforePaise'] ?? map['balance_before_paise']) as num?)?.toInt() ?? 0,
+      balanceAfterPaise: ((map['balanceAfterPaise'] ?? map['balance_after_paise']) as num?)?.toInt() ?? 0,
+      relatedExpenseId: (map['relatedExpenseId'] ?? map['related_expense_id']) as String?,
+      relatedTransactionId: (map['relatedTransactionId'] ?? map['related_transaction_id']) as String?,
       calculatedPlatformFeePaise:
-          (map['calculatedPlatformFeePaise'] as num?)?.toInt() ?? 0,
+          ((map['calculatedPlatformFeePaise'] ?? map['platform_fee_paise']) as num?)?.toInt() ?? 0,
       provider: map['provider'] as String?,
-      providerReference: map['providerReference'] as String?,
+      providerReference: (map['providerReference'] ?? map['provider_reference']) as String?,
       mode: map['mode'] as String? ?? 'sandbox',
-      clientRequestId: map['clientRequestId'] as String? ?? '',
+      clientRequestId: (map['clientRequestId'] ?? map['client_request_id']) as String? ?? '',
     );
   }
 }

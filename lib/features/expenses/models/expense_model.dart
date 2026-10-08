@@ -44,21 +44,23 @@ class ExpenseModel {
   factory ExpenseModel.fromMap(Map<String, dynamic> map, String id) {
     return ExpenseModel(
       id: id,
-      description: map['description'] as String? ?? 'Expense',
-      amountPaise: (map['amountPaise'] as num?)?.toInt() ?? 0,
+      description: (map['description'] ?? map['title']) as String? ?? 'Expense',
+      amountPaise: ((map['amountPaise'] ?? map['amount_paise']) as num?)?.toInt() ?? 0,
       category: map['category'] as String? ?? 'Food',
-      paidByUid: map['paidByUid'] as String? ?? '',
-      paidByName: map['paidByName'] as String? ?? 'Member',
+      paidByUid: (map['paidByUid'] ?? map['paid_by_user_id']) as String? ?? '',
+      paidByName: (map['paidByName'] ?? map['paid_by_name']) as String? ?? 'Member',
       participantUids:
           (map['participantUids'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      splitType: map['splitType'] as String? ?? 'equal',
-      createdBy: map['createdBy'] as String? ?? '',
+      splitType: (map['splitType'] ?? map['split_type']) as String? ?? 'equal',
+      createdBy: (map['createdBy'] ?? map['created_by']) as String? ?? '',
       createdAt: map['createdAt'] != null
           ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (map['created_at'] != null
+              ? DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
     );
   }
 }

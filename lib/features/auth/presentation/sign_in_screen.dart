@@ -37,6 +37,40 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     }
   }
 
+  Future<void> _handleGoogleSignIn() async {
+    try {
+      final success = await ref.read(authProvider.notifier).signInWithGoogle();
+      if (success && mounted) {
+        context.go('/');
+      } else if (mounted) {
+        final error = ref.read(authProvider).error;
+        if (error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error.message),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        final isApiException10 = e.toString().contains('10');
+        final message = isApiException10
+            ? 'Google Sign-In configuration error (ApiException: 10). Please check app setup.'
+            : 'Google Sign-In failed: ${e.toString()}';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   void _showForgotPasswordDialog() {
     final emailCtrl = TextEditingController(text: _emailController.text);
     showDialog(
@@ -210,6 +244,33 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                             ),
                           )
                         : const Text('Sign In'),
+                  ),
+                ),
+                const SizedBox(height: AppConstants.spaceLg),
+
+                Center(
+                  child: Text(
+                    'or continue with',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: AppConstants.spaceMd),
+                Center(
+                  child: OutlinedButton.icon(
+                    onPressed: authState.isLoading ? null : _handleGoogleSignIn,
+                    icon: const Icon(Icons.g_mobiledata, size: 28),
+                    label: const Text('Sign in with Google'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppConstants.spaceLg,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(height: AppConstants.spaceLg),

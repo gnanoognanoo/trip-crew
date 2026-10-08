@@ -17,13 +17,13 @@ class TripsScreen extends ConsumerWidget {
     final tripsState = ref.watch(tripsProvider);
 
     final activeTrips = tripsState.trips
-        .where((t) => t.status == 'active')
+        .where((t) => t.isActive)
         .toList();
     final upcomingTrips = tripsState.trips
-        .where((t) => t.status == 'upcoming')
+        .where((t) => !t.isActive && t.status == 'upcoming')
         .toList();
     final completedTrips = tripsState.trips
-        .where((t) => t.status == 'completed')
+        .where((t) => !t.isActive && t.status == 'completed')
         .toList();
 
     return DefaultTabController(

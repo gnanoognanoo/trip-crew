@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_status.dart';
 
 /// Represents an attempt to make a contribution via external payment rails.
@@ -77,36 +76,42 @@ class PaymentAttempt {
 
   factory PaymentAttempt.fromMap(Map<String, dynamic> map, String id) {
     DateTime parseDate(dynamic val) {
-      if (val is Timestamp) return val.toDate();
       if (val is String) return DateTime.tryParse(val) ?? DateTime.now();
+      try {
+        final dynamic dyn = val;
+        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+      } catch (_) {}
       return DateTime.now();
     }
 
     DateTime? parseNullableDate(dynamic val) {
       if (val == null) return null;
-      if (val is Timestamp) return val.toDate();
       if (val is String) return DateTime.tryParse(val);
+      try {
+        final dynamic dyn = val;
+        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+      } catch (_) {}
       return null;
     }
 
     return PaymentAttempt(
       id: id,
-      tripId: map['tripId'] as String? ?? '',
-      uid: map['uid'] as String? ?? '',
+      tripId: (map['tripId'] ?? map['trip_id']) as String? ?? '',
+      uid: (map['uid'] ?? map['user_id']) as String? ?? '',
       type: map['type'] as String? ?? 'contribution',
-      amountPaise: (map['amountPaise'] as num?)?.toInt() ?? 0,
-      platformFeePaise: (map['platformFeePaise'] as num?)?.toInt() ?? 0,
-      totalChargePaise: (map['totalChargePaise'] as num?)?.toInt() ?? 0,
+      amountPaise: ((map['amountPaise'] ?? map['amount_paise']) as num?)?.toInt() ?? 0,
+      platformFeePaise: ((map['platformFeePaise'] ?? map['platform_fee_paise']) as num?)?.toInt() ?? 0,
+      totalChargePaise: ((map['totalChargePaise'] ?? map['total_charge_paise']) as num?)?.toInt() ?? 0,
       provider: map['provider'] as String? ?? 'sandbox',
-      providerReference: map['providerReference'] as String?,
-      clientRequestId: map['clientRequestId'] as String? ?? '',
-      paymentIntentId: map['paymentIntentId'] as String? ?? '',
+      providerReference: (map['providerReference'] ?? map['provider_reference']) as String?,
+      clientRequestId: (map['clientRequestId'] ?? map['client_request_id']) as String? ?? '',
+      paymentIntentId: (map['paymentIntentId'] ?? map['payment_intent_id']) as String? ?? '',
       status: PaymentStatus.fromString(map['status'] as String? ?? 'created'),
-      createdAt: parseDate(map['createdAt']),
-      updatedAt: parseDate(map['updatedAt']),
-      verifiedAt: parseNullableDate(map['verifiedAt']),
-      ledgerTransactionId: map['ledgerTransactionId'] as String?,
-      failureReason: map['failureReason'] as String?,
+      createdAt: parseDate(map['createdAt'] ?? map['created_at']),
+      updatedAt: parseDate(map['updatedAt'] ?? map['updated_at']),
+      verifiedAt: parseNullableDate(map['verifiedAt'] ?? map['verified_at']),
+      ledgerTransactionId: (map['ledgerTransactionId'] ?? map['ledger_transaction_id']) as String?,
+      failureReason: (map['failureReason'] ?? map['failure_reason']) as String?,
     );
   }
 

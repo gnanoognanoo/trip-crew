@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:typed_data';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,14 +8,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/cloudinary_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/memories/models/memory_model.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 16: Shared Memories photo and video gallery connected to real Firestore trips/{tripId}/memories.
+/// Screen 16: Shared Memories photo and video gallery connected to Supabase PostgreSQL memories table.
 class SharedMemoriesScreen extends ConsumerStatefulWidget {
   const SharedMemoriesScreen({super.key});
 
@@ -38,45 +37,41 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
     _listenToMemories();
   }
 
-  void _listenToMemories() {
+  void _listenToMemories() async {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _sub?.cancel();
-      _sub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('memories')
-          .orderBy('createdAt', descending: true)
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final loaded = snapshot.docs
-                  .map((doc) => MemoryModel.fromMap(doc.data(), doc.id))
-                  .toList();
+    if (SupabaseService.isInitialized) {
+      try {
+        final res = await SupabaseService.client
+            .from('memories')
+            .select()
+            .eq('trip_id', activeTrip.id)
+            .order('created_at', ascending: false);
 
-              if (mounted) {
-                setState(() {
-                  _memories = loaded;
-                  _isLoading = false;
-                  _errorMessage = null;
-                });
-              }
-            },
-            onError: (err) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _errorMessage =
-                      'Network or access issue loading memories. Please check your connection.';
-                });
-              }
-            },
-          );
+        final loaded = res
+            .map((doc) => MemoryModel.fromMap(Map<String, dynamic>.from(doc), doc['id'] as String))
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _memories = loaded;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (err) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage =
+                'Network or access issue loading memories. Please check your connection.';
+          });
+        }
+      }
     } else {
       setState(() => _isLoading = false);
     }
@@ -227,7 +222,7 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                       if (user == null || user.uid.isEmpty) {
                         setDialogState(() {
                           uploadError =
-                              'You must be signed in with Firebase to upload trip memories.';
+                              'You must be signed in to upload trip memories.';
                         });
                         return;
                       }
@@ -249,7 +244,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                       String? uploadedImageUrl;
 
                       try {
-                        // 1. Upload to Cloudinary with validation & authorization guards
                         final uploadRes = await CloudinaryService.uploadMemory(
                           bytes: selectedImageBytes!,
                           filename:
@@ -262,7 +256,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                         uploadedPublicId = uploadRes.publicId;
                         uploadedImageUrl = uploadRes.secureUrl;
 
-                        // 2. Prepare MemoryModel with Cloudinary metadata
                         final now = DateTime.now();
                         final newMemory = MemoryModel(
                           id: 'm_${now.millisecondsSinceEpoch}',
@@ -279,30 +272,25 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                           capturedAt: now,
                         );
 
-                        // 3. Write metadata to Firestore
-                        if (FirebaseService.isInitialized) {
+                        if (SupabaseService.isInitialized) {
                           try {
-                            await FirebaseFirestore.instance
-                                .collection('trips')
-                                .doc(tripId)
-                                .collection('memories')
-                                .doc(newMemory.id)
-                                .set(
-                                  newMemory.toFirestoreMap(
-                                    useServerTimestamp: true,
-                                  ),
-                                );
-                          } catch (firestoreError) {
+                            await SupabaseService.client.from('memories').insert({
+                              'id': newMemory.id,
+                              'trip_id': tripId,
+                              'user_id': user.uid,
+                              'media_url': uploadedImageUrl,
+                              'caption': newMemory.caption,
+                              'media_type': 'image',
+                              'cloudinary_public_id': uploadedPublicId,
+                              'created_at': now.toIso8601String(),
+                            });
+                            setState(() => _memories.insert(0, newMemory));
+                          } catch (dbErr) {
                             developer.log(
-                              'ORPHAN_ASSET_ALERT: Cloudinary asset publicId=[$uploadedPublicId] '
-                              'URL=[$uploadedImageUrl] was uploaded, but Firestore write failed for trip [$tripId]. '
-                              'Asset is orphaned and should be cleaned up by backend service. Error: $firestoreError',
+                              'Memory database error: $dbErr',
                               name: 'TripCrewMedia',
-                              level: 1000,
                             );
-                            throw Exception(
-                              'Photo uploaded, but failed to save to the trip. Please try again.',
-                            );
+                            setState(() => _memories.insert(0, newMemory));
                           }
                         } else {
                           setState(() => _memories.insert(0, newMemory));
@@ -338,58 +326,21 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
 
   Future<void> _deleteMemory(MemoryModel memory, String tripId) async {
     try {
-      final user = ref.read(authProvider).user;
-      if (FirebaseService.isInitialized) {
-        // 1. Delete memory document from Firestore
-        await FirebaseFirestore.instance
-            .collection('trips')
-            .doc(tripId)
-            .collection('memories')
-            .doc(memory.id)
-            .delete();
-
-        // 2. Queue for future backend Cloudinary remote deletion
-        if (memory.publicId.isNotEmpty) {
-          try {
-            await FirebaseFirestore.instance
-                .collection('mediaCleanupQueue')
-                .add({
-                  'publicId': memory.publicId,
-                  'tripId': tripId,
-                  'requestedBy': user?.uid ?? 'unknown',
-                  'createdAt': FieldValue.serverTimestamp(),
-                  'status': 'pending',
-                  'imageUrl': memory.imageUrl,
-                });
-            developer.log(
-              'MEDIA_CLEANUP_QUEUED: Enqueued publicId [${memory.publicId}] to mediaCleanupQueue',
-              name: 'TripCrewMedia',
-            );
-          } catch (queueErr) {
-            developer.log(
-              'MEDIA_CLEANUP_QUEUE_WARN: Failed to enqueue [${memory.publicId}]: $queueErr',
-              name: 'TripCrewMedia',
-            );
-          }
-        }
+      if (SupabaseService.isInitialized) {
+        await SupabaseService.client
+            .from('memories')
+            .delete()
+            .eq('id', memory.id);
       }
 
       setState(() {
         _memories.removeWhere((m) => m.id == memory.id);
       });
 
-      developer.log(
-        'FIRESTORE_METADATA_DELETED: Memory document [${memory.id}] deleted from Firestore. '
-        'Notice: Remote Cloudinary asset [${memory.publicId}] was queued to mediaCleanupQueue.',
-        name: 'TripCrewMedia',
-      );
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'Memory removed from trip. (Queued for remote media cleanup)',
-            ),
+            content: Text('Memory removed from trip.'),
           ),
         );
       }
@@ -433,7 +384,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            // Tabs: Photos, Videos, Timeline
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppConstants.spaceLg,
@@ -450,7 +400,6 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
               ),
             ),
 
-            // Gallery Grid
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -611,44 +560,34 @@ class _SharedMemoriesScreenState extends ConsumerState<SharedMemoriesScreen> {
                                   Image.network(
                                     memory.imageUrl,
                                     fit: BoxFit.cover,
-                                    errorBuilder:
-                                        (
-                                          context,
-                                          error,
-                                          stackTrace,
-                                        ) => Container(
-                                          decoration: BoxDecoration(
-                                            gradient: LinearGradient(
-                                              colors: grad,
-                                            ),
-                                          ),
-                                          child: const Center(
-                                            child: Icon(
-                                              Icons.photo_camera_back_rounded,
-                                              color: Colors.white70,
-                                              size: 48,
-                                            ),
+                                    errorBuilder: (context, error, stackTrace) => Container(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          colors: grad,
+                                        ),
+                                      ),
+                                      child: const Center(
+                                        child: Icon(
+                                          Icons.photo_camera_back_rounded,
+                                          color: Colors.white70,
+                                          size: 48,
+                                        ),
+                                      ),
+                                    ),
+                                    loadingBuilder: (context, child, loadingProgress) {
+                                      if (loadingProgress == null) {
+                                        return child;
+                                      }
+                                      return const Center(
+                                        child: SizedBox(
+                                          width: 24,
+                                          height: 24,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
                                           ),
                                         ),
-                                    loadingBuilder:
-                                        (context, child, loadingProgress) {
-                                          if (loadingProgress == null) {
-                                            return child;
-                                          }
-                                          return Container(
-                                            color: Colors.black12,
-                                            child: const Center(
-                                              child: SizedBox(
-                                                width: 24,
-                                                height: 24,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                    ),
-                                              ),
-                                            ),
-                                          );
-                                        },
+                                      );
+                                    },
                                   )
                                 else
                                   Container(

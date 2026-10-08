@@ -156,7 +156,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   child: _buildTripPayQuickActionCard(
                     context,
                     tripsState.trips
-                        .where((t) => t.status == 'active')
+                        .where((t) => t.isActive)
                         .toList(),
                     activeTrip,
                   ),

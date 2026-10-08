@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,14 +6,14 @@ import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/crew/models/crew_member.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 7: Crew Members screen connected to real Firestore subcollection.
+/// Screen 7: Crew Members screen connected to Supabase PostgreSQL trip_members table.
 class CrewScreen extends ConsumerStatefulWidget {
   const CrewScreen({super.key});
 
@@ -34,52 +33,65 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
     _listenToCrew();
   }
 
-  void _listenToCrew() {
+  void _listenToCrew() async {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _sub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('members')
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final loaded = snapshot.docs
-                  .map((doc) => CrewMember.fromMap(doc.data(), doc.id))
-                  .toList();
+    if (SupabaseService.isInitialized) {
+      try {
+        final res = await SupabaseService.client
+            .from('trip_members')
+            .select('user_id, role, joined_at, profiles(display_name, photo_url)')
+            .eq('trip_id', activeTrip.id);
 
-              // Sort owner first, then by joinedAt
-              loaded.sort((a, b) {
-                if (a.isOwner) return -1;
-                if (b.isOwner) return 1;
-                return a.joinedAt.compareTo(b.joinedAt);
-              });
+        final loaded = <CrewMember>[];
+        for (final row in res) {
+          final uid = row['user_id'] as String;
+          final role = row['role'] as String? ?? 'member';
+          final joinedAtStr = row['joined_at'] as String?;
+          final profile = row['profiles'] as Map<String, dynamic>?;
+          final name = profile?['display_name'] as String? ?? 'Member';
+          final photo = profile?['photo_url'] as String?;
 
-              if (mounted) {
-                setState(() {
-                  _members = loaded;
-                  _isLoading = false;
-                  _errorMessage = null;
-                });
-              }
-            },
-            onError: (e) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _errorMessage =
-                      'Could not load crew members. Check your connection.';
-                });
-              }
-            },
+          loaded.add(
+            CrewMember(
+              uid: uid,
+              displayName: name,
+              role: role,
+              photoUrl: photo,
+              isOnline: true,
+              joinedAt: joinedAtStr != null
+                  ? DateTime.tryParse(joinedAtStr) ?? DateTime.now()
+                  : DateTime.now(),
+            ),
           );
+        }
+
+        loaded.sort((a, b) {
+          if (a.isOwner) return -1;
+          if (b.isOwner) return 1;
+          return a.joinedAt.compareTo(b.joinedAt);
+        });
+
+        if (mounted) {
+          setState(() {
+            _members = loaded;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Could not load crew members. Check your connection.';
+          });
+        }
+      }
     } else {
-      // Local fallback for offline mode
       final currentUser = ref.read(authProvider).user;
       setState(() {
         _members = [
@@ -173,6 +185,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('${member.displayName} removed.')),
           );
+          _listenToCrew();
         }
       } catch (e) {
         if (mounted) {
@@ -211,7 +224,6 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header Stats Card
             Padding(
               padding: const EdgeInsets.all(AppConstants.spaceLg),
               child: Card(
@@ -264,7 +276,6 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
               ),
             ),
 
-            // Members List
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -392,7 +403,6 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                                     ),
                                   ),
                                 ),
-                              // Owner can remove member (cannot remove self or trip owner)
                               if (isCurrentOwner &&
                                   !member.isOwner &&
                                   member.uid != activeTrip.ownerId)
@@ -412,7 +422,6 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                     ),
             ),
 
-            // Bottom "Invite via" section
             Padding(
               padding: const EdgeInsets.all(AppConstants.spaceLg),
               child: Column(

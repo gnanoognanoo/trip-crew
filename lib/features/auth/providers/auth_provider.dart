@@ -1,10 +1,12 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:tripcrew/core/errors/failure.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/auth/models/user_profile.dart';
 
 class AuthState {
@@ -78,46 +80,49 @@ class AuthNotifier extends Notifier<AuthState> {
     String? displayName,
   ) async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(uid)
-          .get();
-      if (doc.exists && doc.data() != null) {
-        final profile = UserProfile.fromMap(doc.data()!, uid);
-        state = AuthState(user: profile, isLoading: false);
-      } else {
-        final newProfile = UserProfile(
-          uid: uid,
-          name: displayName ?? email.split('@').first,
-          email: email,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-        );
-        await FirebaseFirestore.instance.collection('users').doc(uid).set({
-          'uid': uid,
-          'name': newProfile.name,
-          'email': email,
-          'photoUrl': null,
-          'tripCount': 0,
-          'distanceKm': 0,
-          'memoryCount': 0,
-          'createdAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-        state = AuthState(user: newProfile, isLoading: false);
+      if (SupabaseService.isInitialized) {
+        final res = await SupabaseService.client
+            .from('profiles')
+            .select()
+            .eq('id', uid)
+            .maybeSingle();
+
+        if (res != null) {
+          final profile = UserProfile.fromMap(res, uid);
+          state = AuthState(user: profile, isLoading: false);
+          return;
+        } else {
+          final newProfile = UserProfile(
+            uid: uid,
+            name: displayName ?? email.split('@').first,
+            email: email,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          );
+          await SupabaseService.client.from('profiles').upsert({
+            'id': uid,
+            'full_name': newProfile.name,
+            'email': email,
+            'avatar_url': null,
+            'created_at': DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+          });
+          state = AuthState(user: newProfile, isLoading: false);
+          return;
+        }
       }
-    } catch (_) {
-      state = AuthState(
-        user: UserProfile(
-          uid: uid,
-          name: displayName ?? email.split('@').first,
-          email: email,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
-        ),
-        isLoading: false,
-      );
-    }
+    } catch (_) {}
+
+    state = AuthState(
+      user: UserProfile(
+        uid: uid,
+        name: displayName ?? email.split('@').first,
+        email: email,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+      isLoading: false,
+    );
   }
 
   Future<bool> signInWithEmail(String email, String password) async {
@@ -182,6 +187,161 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  Future<bool> signInWithGoogle() async {
+    state = state.copyWith(isLoading: true, clearError: true);
+    try {
+      if (FirebaseService.isInitialized) {
+        final GoogleSignIn googleSignIn = GoogleSignIn(
+          serverClientId:
+              '540250477392-b93lsaip4i32sgmimgcb54md47oiojcn.apps.googleusercontent.com',
+        );
+        final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+
+        if (googleUser == null) {
+          state = state.copyWith(isLoading: false);
+          return false;
+        }
+
+        final GoogleSignInAuthentication googleAuth =
+            await googleUser.authentication;
+
+        final OAuthCredential credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+
+        final UserCredential userCredential = await FirebaseAuth.instance
+            .signInWithCredential(credential);
+
+        if (userCredential.user != null) {
+          final user = userCredential.user!;
+          await _saveOrUpdateGoogleUserProfile(user);
+          await AnalyticsService.logLogin();
+          return true;
+        }
+      } else {
+        await Future.delayed(const Duration(milliseconds: 300));
+        final profile = UserProfile(
+          uid: 'google_user_demo',
+          name: 'Google User',
+          email: 'googleuser@example.com',
+          photoUrl: null,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        await AnalyticsService.logLogin();
+        state = AuthState(user: profile, isLoading: false);
+        return true;
+      }
+      return false;
+    } on PlatformException catch (e) {
+      String userMessage = 'Google Sign-In failed. Please try again.';
+      if (e.message?.contains('10') == true ||
+          e.code.contains('10') ||
+          e.toString().contains('10')) {
+        userMessage =
+            'Google Sign-In configuration error (ApiException: 10). Please check app setup.';
+      } else if (e.code == 'sign_in_canceled' || e.code == 'canceled') {
+        userMessage = 'Google Sign-In was canceled.';
+      }
+      state = state.copyWith(
+        isLoading: false,
+        error: AuthFailure(message: userMessage, code: e.code),
+      );
+      return false;
+    } on FirebaseAuthException catch (e) {
+      String userMessage = 'Google Sign-In failed. Please try again.';
+      if (e.code == 'account-exists-with-different-credential') {
+        userMessage =
+            'An account already exists with the same email address.';
+      } else if (e.code == 'invalid-credential') {
+        userMessage = 'Invalid credentials received from Google.';
+      }
+      state = state.copyWith(
+        isLoading: false,
+        error: AuthFailure(message: userMessage, code: e.code),
+      );
+      return false;
+    } catch (e) {
+      String userMessage = 'Google Sign-In error: ${e.toString()}';
+      if (e.toString().contains('10')) {
+        userMessage =
+            'Google Sign-In configuration error (ApiException: 10). Please check app setup.';
+      }
+      state = state.copyWith(
+        isLoading: false,
+        error: UnknownFailure(
+          message: userMessage,
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<void> _saveOrUpdateGoogleUserProfile(User user) async {
+    try {
+      final displayName = user.displayName ??
+          (user.email != null && user.email!.isNotEmpty
+              ? user.email!.split('@').first
+              : 'TripCrew Member');
+
+      if (SupabaseService.isInitialized) {
+        final existing = await SupabaseService.client
+            .from('profiles')
+            .select()
+            .eq('id', user.uid)
+            .maybeSingle();
+
+        if (existing == null) {
+          final profile = UserProfile(
+            uid: user.uid,
+            name: displayName,
+            email: user.email ?? '',
+            photoUrl: user.photoURL,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          );
+          await SupabaseService.client.from('profiles').upsert({
+            'id': user.uid,
+            'full_name': profile.name,
+            'email': profile.email,
+            'avatar_url': user.photoURL,
+            'created_at': DateTime.now().toIso8601String(),
+            'updated_at': DateTime.now().toIso8601String(),
+          });
+          state = AuthState(user: profile, isLoading: false);
+          return;
+        } else {
+          final profile = UserProfile.fromMap(existing, user.uid);
+          if (existing['avatar_url'] == null && user.photoURL != null) {
+            await SupabaseService.client.from('profiles').update({
+              'avatar_url': user.photoURL,
+              'updated_at': DateTime.now().toIso8601String(),
+            }).eq('id', user.uid);
+          }
+          state = AuthState(
+            user: profile.copyWith(
+              photoUrl: profile.photoUrl ?? user.photoURL,
+            ),
+            isLoading: false,
+          );
+          return;
+        }
+      }
+    } catch (_) {}
+
+    final profile = UserProfile(
+      uid: user.uid,
+      name: user.displayName ??
+          (user.email != null ? user.email!.split('@').first : 'User'),
+      email: user.email ?? '',
+      photoUrl: user.photoURL,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    state = AuthState(user: profile, isLoading: false);
+  }
+
   Future<bool> signUpWithEmail({
     required String name,
     required String email,
@@ -205,17 +365,16 @@ class AuthNotifier extends Notifier<AuthState> {
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           );
-          await FirebaseFirestore.instance.collection('users').doc(uid).set({
-            'uid': uid,
-            'name': name.trim(),
-            'email': email.trim(),
-            'photoUrl': null,
-            'tripCount': 0,
-            'distanceKm': 0,
-            'memoryCount': 0,
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+          if (SupabaseService.isInitialized) {
+            await SupabaseService.client.from('profiles').upsert({
+              'id': uid,
+              'full_name': name.trim(),
+              'email': email.trim(),
+              'avatar_url': null,
+              'created_at': DateTime.now().toIso8601String(),
+              'updated_at': DateTime.now().toIso8601String(),
+            });
+          }
           await AnalyticsService.logAccountCreated();
           state = AuthState(user: profile, isLoading: false);
           return true;
@@ -270,24 +429,26 @@ class AuthNotifier extends Notifier<AuthState> {
     final updated = state.user!.copyWith(photoUrl: photoUrl);
     state = state.copyWith(user: updated);
 
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('profiles').update({
+          'avatar_url': photoUrl,
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', updated.uid);
+      } catch (_) {}
+    }
     if (FirebaseService.isInitialized) {
       try {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(updated.uid)
-            .update({
-              'photoUrl': photoUrl,
-              'updatedAt': FieldValue.serverTimestamp(),
-            });
         await FirebaseAuth.instance.currentUser?.updatePhotoURL(photoUrl);
-      } catch (_) {
-        // Silently preserve local state if network fails
-      }
+      } catch (_) {}
     }
   }
 
   Future<void> signOut() async {
     if (FirebaseService.isInitialized) {
+      try {
+        await GoogleSignIn().signOut();
+      } catch (_) {}
       await FirebaseAuth.instance.signOut();
     }
     state = const AuthState(isLoading: false, user: null);

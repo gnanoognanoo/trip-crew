@@ -1,8 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -67,7 +66,7 @@ class _BetaFeedbackSheetState extends ConsumerState<BetaFeedbackSheet> {
       return;
     }
 
-    if (!FirebaseService.isInitialized) {
+    if (!SupabaseService.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Internet connection required to submit feedback.'),
@@ -82,20 +81,18 @@ class _BetaFeedbackSheetState extends ConsumerState<BetaFeedbackSheet> {
       final activeTrip = ref.read(activeTripProvider);
       final tripId = widget.initialTripId ?? activeTrip?.id;
 
-      final docRef = FirebaseFirestore.instance
-          .collection('betaFeedback')
-          .doc();
+      final id = 'fb_${DateTime.now().millisecondsSinceEpoch}';
       final payload = {
-        'id': docRef.id,
-        'uid': user.uid,
-        if (tripId != null && tripId.isNotEmpty) 'tripId': tripId,
+        'id': id,
+        'user_id': user.uid,
+        if (tripId != null && tripId.isNotEmpty) 'trip_id': tripId,
         'category': _selectedCategory,
         'message': message,
-        'createdAt': FieldValue.serverTimestamp(),
-        'appVersion': AppConstants.appVersion,
+        'app_version': AppConstants.appVersion,
+        'created_at': DateTime.now().toIso8601String(),
       };
 
-      await docRef.set(payload);
+      await SupabaseService.client.from('beta_feedback').insert(payload);
 
       if (mounted) {
         Navigator.pop(context);

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
+import 'package:tripcrew/features/auth/providers/auth_provider.dart';
+import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_status.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_fee_config.dart';
@@ -12,7 +15,7 @@ import 'package:tripcrew/features/trip_pay/providers/sandbox_payment_provider.da
 import 'package:tripcrew/features/trip_pay/providers/trip_pay_notifier.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen for adding a contribution (share) to the shared Trip Pot via UPI rails.
+/// Screen for adding a contribution (share) to the shared Trip Pot via UPI / Razorpay rails.
 class AddContributionScreen extends ConsumerStatefulWidget {
   const AddContributionScreen({super.key});
 
@@ -50,7 +53,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
   int get _feePaise => TripPayFeeConfig.calculateFeePaise(_amountPaise);
   int get _totalPaise => TripPayFeeConfig.calculateTotalPaise(_amountPaise);
 
-  /// Initiates the UPI Contribution flow and displays the interactive state sheet.
+  /// Initiates the Contribution flow and displays the interactive state sheet.
   Future<void> _startContributionFlow() async {
     final amountPaise = _amountPaise;
     if (amountPaise <= 0) {
@@ -97,7 +100,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
 
     if (!mounted) return;
 
-    // Step 2: Open UPI Payment Sheet (WAITING FOR PAYMENT -> VERIFYING -> SUCCESS/FAILED)
+    // Step 2: Open Payment Sheet (HANDLES RAZORPAY / SANDBOX FLOWS)
     await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -160,6 +163,8 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
       _amountController.text = suggestedAmount.toStringAsFixed(0);
     }
 
+    final isRazorpayMode = tripPayState.providerType == PaymentProviderType.razorpay;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Add Your Share'),
@@ -176,29 +181,33 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
             children: [
               const SizedBox(height: AppConstants.spaceSm),
 
-              // Sandbox Test Mode Badge
+              // Environment Mode Badge
               Container(
                 padding: const EdgeInsets.all(AppConstants.spaceMd),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFEF3C7),
+                  color: isRazorpayMode ? const Color(0xFFEFF6FF) : const Color(0xFFFEF3C7),
                   borderRadius: BorderRadius.circular(AppConstants.radiusMd),
-                  border: Border.all(color: const Color(0xFFF59E0B)),
+                  border: Border.all(
+                    color: isRazorpayMode ? const Color(0xFF3B82F6) : const Color(0xFFF59E0B),
+                  ),
                 ),
-                child: const Row(
+                child: Row(
                   children: [
                     Icon(
-                      Icons.shield_outlined,
-                      color: Color(0xFFB45309),
+                      isRazorpayMode ? Icons.bolt : Icons.shield_outlined,
+                      color: isRazorpayMode ? const Color(0xFF1D4ED8) : const Color(0xFFB45309),
                       size: 18,
                     ),
-                    SizedBox(width: 8),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'PAYMENT TEST MODE • Sandbox UPI Simulator • No real money is transferred.',
+                        isRazorpayMode
+                            ? 'RAZORPAY TEST MODE • Live Checkout • Razorpay Test Gateway'
+                            : 'PAYMENT TEST MODE • Sandbox UPI Simulator • No real money is transferred.',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFF92400E),
+                          color: isRazorpayMode ? const Color(0xFF1E40AF) : const Color(0xFF92400E),
                         ),
                       ),
                     ),
@@ -308,7 +317,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
 
               const Spacer(),
 
-              // Pay with UPI Button
+              // Pay Button
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
@@ -326,7 +335,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
                           ),
                         )
                       : Text(
-                          'Pay ${CurrencyFormatter.formatUnits(_totalPaise)} with UPI',
+                          'Pay ${CurrencyFormatter.formatUnits(_totalPaise)} ${isRazorpayMode ? "with Razorpay" : "with UPI"}',
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                 ),
@@ -359,7 +368,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
   }
 }
 
-/// Interactive UPI payment sheet supporting CREATED, WAITING, VERIFYING, SUCCESS, and FAILED states.
+/// Payment sheet supporting both Razorpay Flutter SDK & Sandbox flows.
 class _UpiPaymentSheet extends ConsumerStatefulWidget {
   final String tripId;
   final PaymentIntent intent;
@@ -389,23 +398,150 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   _SheetState _state = _SheetState.waitingForPayment;
   String? _errorMessage;
 
+  late final Razorpay _razorpay;
+  bool _isRazorpayInitialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initRazorpay();
+  }
+
+  void _initRazorpay() {
+    if (widget.intent.provider == 'razorpay') {
+      try {
+        _razorpay = Razorpay();
+        _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+        _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+        _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
+        _isRazorpayInitialized = true;
+
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _launchRazorpayCheckout();
+        });
+      } catch (e) {
+        _isRazorpayInitialized = false;
+      }
+    }
+  }
+
+  void _launchRazorpayCheckout() {
+    if (!_isRazorpayInitialized) return;
+    final keyId = widget.intent.metadata['keyId'] as String? ?? 'rzp_test_tripcrew_key';
+    final user = ref.read(authProvider).user;
+
+    final options = {
+      'key': keyId.isNotEmpty ? keyId : 'rzp_test_tripcrew_key',
+      'amount': widget.intent.totalChargePaise,
+      'name': 'TripCrew',
+      'order_id': widget.intent.id,
+      'description': 'Trip Pot Contribution',
+      'prefill': {
+        'contact': '9876543210',
+        'email': user?.email ?? 'traveler@tripcrew.app',
+      },
+      'notes': {
+        'tripId': widget.tripId,
+        'clientRequestId': widget.intent.clientRequestId,
+      },
+      'external': {
+        'wallets': ['paytm']
+      }
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (_) {
+      // Catch platform-specific unhandled channel calls in desktop environments
+    }
+  }
+
+  Future<void> _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    final paymentId = response.paymentId ?? '';
+    final signature = response.signature ?? '';
+
+    if (!mounted) return;
+    setState(() => _state = _SheetState.verifyingPayment);
+
+    final notifier = ref.read(tripPayProvider.notifier);
+    final providerReference = '$paymentId|$signature|${widget.intent.id}';
+
+    final success = await notifier.verifyAndFinalizeContribution(
+      tripId: widget.tripId,
+      paymentAttemptId: widget.intent.id,
+      providerReference: providerReference,
+    );
+
+    if (!mounted) return;
+
+    if (success) {
+      setState(() => _state = _SheetState.success);
+      await Future.delayed(const Duration(milliseconds: 900));
+      if (mounted) widget.onSuccess();
+    } else {
+      final notifierErr = ref.read(tripPayProvider).error;
+      setState(() {
+        _state = _SheetState.failed;
+        _errorMessage = notifierErr ?? 'Payment finalization failed. Trip Pot unchanged. Please retry.';
+      });
+    }
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    if (!mounted) return;
+    setState(() {
+      _state = _SheetState.failed;
+      _errorMessage = response.message ??
+          'Payment failed or was cancelled (Code ${response.code}). Trip Pot unchanged.';
+    });
+  }
+
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Selected wallet: ${response.walletName}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Future<void> _simulateUpiSuccess() async {
     setState(() => _state = _SheetState.verifyingPayment);
 
     final notifier = ref.read(tripPayProvider.notifier);
     final provider = notifier.paymentProvider;
     if (provider is SandboxPaymentProvider) {
-      provider.simulatedStatus = PaymentStatus.success;
+      provider.setSimulatedStatus(
+        PaymentStatus.success,
+        paymentIntentId: widget.intent.id,
+      );
     }
 
     final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-    final attemptId = attemptSnap.isNotEmpty
-        ? attemptSnap.first.id
-        : 'att_${widget.intent.id.hashCode.abs()}';
+    final matchingAttempt = attemptSnap.firstWhere(
+      (a) => a.paymentIntentId == widget.intent.id,
+      orElse: () => attemptSnap.isNotEmpty
+          ? attemptSnap.first
+          : PaymentAttempt(
+              id: 'att_${widget.intent.id.hashCode.abs()}',
+              tripId: widget.tripId,
+              uid: widget.intent.uid,
+              amountPaise: widget.intent.amountPaise,
+              platformFeePaise: widget.intent.platformFeePaise,
+              totalChargePaise: widget.intent.totalChargePaise,
+              provider: 'sandbox',
+              clientRequestId: widget.intent.clientRequestId,
+              paymentIntentId: widget.intent.id,
+              status: PaymentStatus.pending,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+    );
 
     final success = await notifier.verifyAndFinalizeContribution(
       tripId: widget.tripId,
-      paymentAttemptId: attemptId,
+      paymentAttemptId: matchingAttempt.id,
       providerReference: 'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
     );
 
@@ -429,17 +565,36 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
     final notifier = ref.read(tripPayProvider.notifier);
     final provider = notifier.paymentProvider;
     if (provider is SandboxPaymentProvider) {
-      provider.simulatedStatus = PaymentStatus.failed;
+      provider.setSimulatedStatus(
+        PaymentStatus.failed,
+        paymentIntentId: widget.intent.id,
+      );
     }
 
     final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-    final attemptId = attemptSnap.isNotEmpty
-        ? attemptSnap.first.id
-        : 'att_${widget.intent.id.hashCode.abs()}';
+    final matchingAttempt = attemptSnap.firstWhere(
+      (a) => a.paymentIntentId == widget.intent.id,
+      orElse: () => attemptSnap.isNotEmpty
+          ? attemptSnap.first
+          : PaymentAttempt(
+              id: 'att_${widget.intent.id.hashCode.abs()}',
+              tripId: widget.tripId,
+              uid: widget.intent.uid,
+              amountPaise: widget.intent.amountPaise,
+              platformFeePaise: widget.intent.platformFeePaise,
+              totalChargePaise: widget.intent.totalChargePaise,
+              provider: 'sandbox',
+              clientRequestId: widget.intent.clientRequestId,
+              paymentIntentId: widget.intent.id,
+              status: PaymentStatus.pending,
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+    );
 
     await notifier.verifyAndFinalizeContribution(
       tripId: widget.tripId,
-      paymentAttemptId: attemptId,
+      paymentAttemptId: matchingAttempt.id,
       providerReference:
           'declined_ref_${DateTime.now().millisecondsSinceEpoch}',
     );
@@ -453,13 +608,19 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   }
 
   void _simulateTimeout() {
+    final provider = ref.read(tripPayProvider.notifier).paymentProvider;
+    if (provider is SandboxPaymentProvider) {
+      provider.setSimulatedStatus(
+        PaymentStatus.expired,
+        paymentIntentId: widget.intent.id,
+      );
+    }
     setState(() {
       _state = _SheetState.expired;
       _errorMessage = 'Payment request timed out. Please try again.';
     });
   }
 
-  /// Polls the payment provider for updated status (Setu or external gateway).
   Future<void> _checkPaymentStatus() async {
     setState(() => _state = _SheetState.verifyingPayment);
     final notifier = ref.read(tripPayProvider.notifier);
@@ -474,16 +635,32 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
 
     if (status == PaymentStatus.success) {
       final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-      final attemptId = attemptSnap.isNotEmpty
-          ? attemptSnap.first.id
-          : 'att_${widget.intent.id.hashCode.abs()}';
+      final matchingAttempt = attemptSnap.firstWhere(
+        (a) => a.paymentIntentId == widget.intent.id,
+        orElse: () => attemptSnap.isNotEmpty
+            ? attemptSnap.first
+            : PaymentAttempt(
+                id: 'att_${widget.intent.id.hashCode.abs()}',
+                tripId: widget.tripId,
+                uid: widget.intent.uid,
+                amountPaise: widget.intent.amountPaise,
+                platformFeePaise: widget.intent.platformFeePaise,
+                totalChargePaise: widget.intent.totalChargePaise,
+                provider: 'sandbox',
+                clientRequestId: widget.intent.clientRequestId,
+                paymentIntentId: widget.intent.id,
+                status: PaymentStatus.pending,
+                createdAt: DateTime.now(),
+                updatedAt: DateTime.now(),
+              ),
+      );
 
       final success = await notifier.verifyAndFinalizeContribution(
         tripId: widget.tripId,
-        paymentAttemptId: attemptId,
+        paymentAttemptId: matchingAttempt.id,
         providerReference:
             widget.intent.metadata['platformBillID'] as String? ??
-            widget.intent.id,
+            'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
       );
 
       if (!mounted) return;
@@ -512,7 +689,7 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Waiting for payment confirmation. Please complete in UPI app and refresh.',
+            'Waiting for payment confirmation. Please complete in payment app and refresh.',
           ),
           duration: Duration(seconds: 2),
         ),
@@ -521,9 +698,17 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   }
 
   @override
+  void dispose() {
+    if (_isRazorpayInitialized) {
+      _razorpay.clear();
+    }
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isSetuProvider = widget.intent.provider == 'setu';
+    final isRazorpayProvider = widget.intent.provider == 'razorpay';
 
     return Container(
       decoration: BoxDecoration(
@@ -549,7 +734,7 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
 
             if (_state == _SheetState.waitingForPayment) ...[
               Text(
-                isSetuProvider ? 'UPI Test Payment' : 'Waiting for Payment',
+                isRazorpayProvider ? 'Razorpay Payment Order' : 'Waiting for Payment',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
@@ -566,7 +751,6 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
               ),
               const SizedBox(height: AppConstants.spaceMd),
 
-              // UPI Details Container
               Container(
                 padding: const EdgeInsets.all(AppConstants.spaceMd),
                 decoration: BoxDecoration(
@@ -579,26 +763,26 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(
-                          Icons.qr_code_2,
+                        Icon(
+                          isRazorpayProvider ? Icons.payment : Icons.qr_code_2,
                           size: 40,
-                          color: Color(0xFF6366F1),
+                          color: const Color(0xFF6366F1),
                         ),
                         const SizedBox(width: 12),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              isSetuProvider
-                                  ? 'Setu UPI UAT Intent'
+                              isRazorpayProvider
+                                  ? 'Razorpay Test Checkout'
                                   : 'UPI Intent / QR Simulation',
                               style: const TextStyle(
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                             Text(
-                              isSetuProvider
-                                  ? 'Sandbox / UAT Environment'
+                              isRazorpayProvider
+                                  ? 'Razorpay SDK v1.4.7'
                                   : 'GPay • PhonePe • Paytm • BHIM',
                               style: const TextStyle(
                                 fontSize: 12,
@@ -609,30 +793,21 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
                         ),
                       ],
                     ),
-                    if (widget.intent.upiIntentUrl != null &&
-                        widget.intent.upiIntentUrl!.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: SelectableText(
-                          widget.intent.upiIntentUrl!,
-                          style: const TextStyle(
-                            fontSize: 10,
-                            fontFamily: 'monospace',
-                          ),
-                          maxLines: 2,
+                    const SizedBox(height: AppConstants.spaceMd),
+                    if (isRazorpayProvider) ...[
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: _launchRazorpayCheckout,
+                          icon: const Icon(Icons.open_in_new, size: 18),
+                          label: const Text('Relaunch Razorpay Checkout'),
                         ),
                       ),
+                      const SizedBox(height: 8),
                     ],
-                    const SizedBox(height: AppConstants.spaceMd),
                     const Divider(),
                     const SizedBox(height: 8),
 
-                    // Manual Status Refresh
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
@@ -642,7 +817,7 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
                       ),
                     ),
 
-                    if (!isSetuProvider) ...[
+                    if (!isRazorpayProvider) ...[
                       const SizedBox(height: 12),
                       const Text(
                         'SIMULATE PROVIDER OUTCOME (SANDBOX)',
@@ -702,7 +877,7 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'Verifying transaction with payment provider...',
+                'Verifying signature with trusted backend...',
                 style: TextStyle(
                   fontSize: 12,
                   color: theme.colorScheme.onSurfaceVariant,
@@ -735,7 +910,7 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
               Text(
                 _state == _SheetState.expired
                     ? 'Payment Expired'
-                    : 'Payment Cancelled',
+                    : 'Payment Cancelled or Failed',
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,

@@ -1,17 +1,16 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/pulse/models/trip_pulse.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 15: Trip Pulse screen connected to real Firestore trips/{tripId}/pulses.
+/// Screen 15: Trip Pulse screen connected to real Supabase trip_pulses table.
 /// Allows members to broadcast and view current needs (Hungry, Break, Tired, Emergency, etc.)
 class TripPulseScreen extends ConsumerStatefulWidget {
   const TripPulseScreen({super.key});
@@ -101,23 +100,21 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _pulseSub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('pulses')
-          .snapshots()
+    if (SupabaseService.isInitialized) {
+      _pulseSub = SupabaseService.client
+          .from('trip_pulses')
+          .stream(primaryKey: ['id'])
+          .eq('trip_id', activeTrip.id)
           .listen(
-            (snapshot) {
+            (data) {
               final counts = <String, int>{};
               String? myCurrent;
 
-              for (final doc in snapshot.docs) {
-                final pulse = TripPulse.fromMap(doc.data(), doc.id);
-                // Only count active, unexpired pulses
+              for (final row in data) {
+                final pulse = TripPulse.fromMap(row, (row['user_id'] ?? row['uid']) as String? ?? '');
                 if (pulse.isCurrentlyActive) {
                   counts[pulse.pulseType] = (counts[pulse.pulseType] ?? 0) + 1;
-                  if (doc.id == user?.uid) {
+                  if (pulse.uid == user?.uid) {
                     myCurrent = pulse.pulseType;
                   }
                 }
@@ -205,7 +202,7 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
     final now = DateTime.now();
     final expiresAt = now.add(pType.defaultDuration);
 
-    if (FirebaseService.isInitialized && user != null) {
+    if (SupabaseService.isInitialized && user != null) {
       final pulse = TripPulse(
         uid: user.uid,
         memberName: user.name,
@@ -216,12 +213,9 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
         isActive: true,
       );
 
-      await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('pulses')
-          .doc(user.uid)
-          .set(pulse.toMap());
+      await SupabaseService.client
+          .from('trip_pulses')
+          .upsert(pulse.toMap(tripId: tripId));
     }
 
     await AnalyticsService.logPulseSent(tripId, title);
@@ -242,27 +236,12 @@ class _TripPulseScreenState extends ConsumerState<TripPulseScreen> {
     final user = ref.read(authProvider).user;
     setState(() => _myPulse = null);
 
-    if (FirebaseService.isInitialized && user != null) {
-      try {
-        await FirebaseFirestore.instance
-            .collection('trips')
-            .doc(tripId)
-            .collection('pulses')
-            .doc(user.uid)
-            .delete();
-      } catch (_) {
-        // Fallback merge
-        await FirebaseFirestore.instance
-            .collection('trips')
-            .doc(tripId)
-            .collection('pulses')
-            .doc(user.uid)
-            .set({
-              'uid': user.uid,
-              'isActive': false,
-              'expiresAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-      }
+    if (SupabaseService.isInitialized && user != null) {
+      await SupabaseService.client
+          .from('trip_pulses')
+          .delete()
+          .eq('trip_id', tripId)
+          .eq('user_id', user.uid);
     }
 
     if (mounted) {

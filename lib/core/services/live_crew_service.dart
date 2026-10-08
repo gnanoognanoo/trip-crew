@@ -1,9 +1,8 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/maps/utils/location_calculator.dart';
 
 enum LocationServiceState {
@@ -16,7 +15,7 @@ enum LocationServiceState {
 }
 
 /// Service managing client-side GPS streaming, Android foreground notification,
-/// and cost-controlled Firestore throttling on Firebase Spark.
+/// and cost-controlled location updates in Supabase PostgreSQL.
 class LiveCrewService {
   static final LiveCrewService instance = LiveCrewService._internal();
   LiveCrewService._internal();
@@ -41,6 +40,7 @@ class LiveCrewService {
   bool get isSharing => _positionSub != null;
   String get activeSharingMode => _activeSharingMode;
   DateTime? get activeSharingUntil => _activeSharingUntil;
+  String? get activePhotoUrl => _activePhotoUrl;
   Position? get lastPosition => _lastWrittenPosition;
 
   // Stream controller to notify UI of current user GPS and status changes
@@ -171,7 +171,7 @@ class LiveCrewService {
       );
     }
 
-    // 2. Fetch immediate initial location and write to Firestore
+    // 2. Fetch immediate initial location and write to Supabase
     try {
       final initialPos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -220,9 +220,8 @@ class LiveCrewService {
     return LocationServiceState.sharing;
   }
 
-  /// Processes incoming GPS positions with Spark cost-control throttling.
+  /// Processes incoming GPS positions with throttling.
   Future<void> _handlePositionUpdate(Position position) async {
-    // Check expiration BEFORE any network write (clean up before uploading another position)
     if (_activeSharingUntil == null ||
         DateTime.now().isAfter(_activeSharingUntil!) ||
         DateTime.now().isAtSameMomentAs(_activeSharingUntil!)) {
@@ -248,33 +247,28 @@ class LiveCrewService {
       position.longitude,
     );
 
-    // Cost Control Throttling Rules for Firebase Spark Free Tier:
-    // Rule 1: Never write faster than once every 15 seconds (prevents high-speed burst writes)
     if (elapsedSeconds < 15) {
       return;
     }
 
-    // Rule 2: If moving significantly (>= 30 meters), write update after 15-30 seconds
     if (distanceMeters >= 30.0 && elapsedSeconds >= 15) {
       await _writeLocationToFirestore(position);
       return;
     }
 
-    // Rule 3: If stationary (< 30 meters), send a heartbeat write only once every 120 seconds
     if (elapsedSeconds >= 120) {
       await _writeLocationToFirestore(position);
       return;
     }
   }
 
-  /// Commits current position to Firestore `trips/{tripId}/locations/{uid}`.
+  /// Commits current position to Supabase `live_locations` table.
   Future<void> _writeLocationToFirestore(
     Position position, {
     bool force = false,
   }) async {
     if (_activeTripId == null || _activeUid == null) return;
 
-    // Defense-in-depth: Never write coordinates if sharingUntil has expired
     if (_activeSharingUntil == null ||
         DateTime.now().isAfter(_activeSharingUntil!) ||
         DateTime.now().isAtSameMomentAs(_activeSharingUntil!)) {
@@ -286,46 +280,30 @@ class LiveCrewService {
     _lastWrittenPosition = position;
     _totalFirestoreWrites++;
 
-    if (!FirebaseService.isInitialized) {
+    if (!SupabaseService.isInitialized) {
       developer.log('Live Crew offline', name: 'LiveCrewService');
       return;
     }
 
     final data = {
-      'uid': _activeUid,
-      'displayName': _activeDisplayName ?? 'Crew Member',
-      'photoUrl': _activePhotoUrl,
+      'id': '${_activeTripId}_$_activeUid',
+      'trip_id': _activeTripId,
+      'user_id': _activeUid,
+      'user_name': _activeDisplayName ?? 'Crew Member',
       'latitude': position.latitude,
       'longitude': position.longitude,
-      'accuracy': position.accuracy,
-      'updatedAt': FieldValue.serverTimestamp(),
-      'sharingMode': _activeSharingMode,
-      'sharingUntil': _activeSharingUntil != null
-          ? Timestamp.fromDate(_activeSharingUntil!)
-          : null,
-      'isSharing': true,
-      'lastForegroundUpdate': FieldValue.serverTimestamp(),
+      'updated_at': DateTime.now().toIso8601String(),
     };
 
     try {
-      await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(_activeTripId)
-          .collection('locations')
-          .doc(_activeUid)
-          .set(data, SetOptions(merge: true));
-
-      developer.log(
-        'Live Crew location update received',
-        name: 'LiveCrewService',
-      );
+      await SupabaseService.client.from('live_locations').upsert(data);
+      developer.log('Live Crew location update sent', name: 'LiveCrewService');
     } catch (e) {
-      developer.log('Live Crew upload failed', name: 'LiveCrewService');
+      developer.log('Live Crew upload failed: $e', name: 'LiveCrewService');
     }
   }
 
-  /// Explicitly stops location sharing, cancels GPS stream and foreground service notification,
-  /// purges in-memory GPS state, and deletes precise coordinates in Firestore.
+  /// Explicitly stops location sharing and deletes location from Supabase.
   Future<void> stopSharing() async {
     _expiryCheckTimer?.cancel();
     _expiryCheckTimer = null;
@@ -335,7 +313,6 @@ class LiveCrewService {
       _positionSub = null;
     }
 
-    // Immediately purge in-memory GPS fixes to guarantee no stale coordinates remain
     _lastWrittenPosition = null;
     _lastWriteTime = null;
     _userPositionController.add(null);
@@ -347,97 +324,36 @@ class LiveCrewService {
     _activeSharingUntil = null;
     _statusController.add(LocationServiceState.off);
 
-    if (tripId != null && uid != null && FirebaseService.isInitialized) {
+    if (tripId != null && uid != null && SupabaseService.isInitialized) {
       try {
-        await FirebaseFirestore.instance
-            .collection('trips')
-            .doc(tripId)
-            .collection('locations')
-            .doc(uid)
-            .set({
-              'uid': uid,
-              'isSharing': false,
-              'sharingMode': 'off',
-              'latitude': FieldValue.delete(),
-              'longitude': FieldValue.delete(),
-              'accuracy': FieldValue.delete(),
-              'sharingUntil': FieldValue.delete(),
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-
-        developer.log(
-          'Live location sharing disabled and precise coordinates deleted in Firestore for [$uid]',
-          name: 'LiveCrewService',
-        );
+        await SupabaseService.client
+            .from('live_locations')
+            .delete()
+            .eq('trip_id', tripId)
+            .eq('user_id', uid);
+        developer.log('Live location deleted in Supabase for [$uid]', name: 'LiveCrewService');
       } catch (e) {
-        developer.log(
-          'Error writing stopSharing to Firestore: $e',
-          name: 'LiveCrewService',
-        );
+        developer.log('Error deleting location: $e', name: 'LiveCrewService');
       }
     }
   }
 
-  /// Idempotently checks and cleans up an expired location document in Firestore.
-  /// Called upon app launch, auth restoration, trip opening, and reconnects.
+  /// Idempotently checks and cleans up an expired location document in Supabase.
   Future<void> checkAndCleanupExpiredLocation({
     required String tripId,
     required String uid,
   }) async {
-    if (!FirebaseService.isInitialized) return;
+    if (!SupabaseService.isInitialized) return;
 
     try {
-      final docRef = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('locations')
-          .doc(uid);
-
-      final snap = await docRef.get();
-      if (!snap.exists) return;
-
-      final data = snap.data();
-      if (data == null) return;
-
-      final rawUntil = data['sharingUntil'];
-      DateTime? sharingUntil;
-      if (rawUntil is Timestamp) {
-        sharingUntil = rawUntil.toDate();
-      } else if (rawUntil is String) {
-        sharingUntil = DateTime.tryParse(rawUntil);
-      }
-
-      final isSharing = data['isSharing'] as bool? ?? false;
-      final hasLat = data.containsKey('latitude') && data['latitude'] != null;
-
-      final isExpired = sharingUntil == null
-          ? isSharing
-          : (DateTime.now().isAfter(sharingUntil) ||
-                DateTime.now().isAtSameMomentAs(sharingUntil));
-
-      if (isExpired || (!isSharing && hasLat)) {
-        await stopSharing();
-        await docRef.set({
-          'uid': uid,
-          'isSharing': false,
-          'sharingMode': 'off',
-          'latitude': FieldValue.delete(),
-          'longitude': FieldValue.delete(),
-          'accuracy': FieldValue.delete(),
-          'sharingUntil': FieldValue.delete(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
-        developer.log(
-          'Idempotent cleanup performed for expired location doc [$uid]',
-          name: 'LiveCrewService',
-        );
-      }
+      await stopSharing();
+      await SupabaseService.client
+          .from('live_locations')
+          .delete()
+          .eq('trip_id', tripId)
+          .eq('user_id', uid);
     } catch (e) {
-      developer.log(
-        'Error during checkAndCleanupExpiredLocation: $e',
-        name: 'LiveCrewService',
-      );
+      developer.log('Error in checkAndCleanupExpiredLocation: $e', name: 'LiveCrewService');
     }
   }
 

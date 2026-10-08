@@ -4,17 +4,16 @@ import 'package:tripcrew/features/trip_pay/models/payment_verification.dart';
 
 /// Clean payment provider interface decoupling TripCrew from specific payment SDKs.
 ///
-/// Current implementation: [SandboxPaymentProvider]
-/// Production adapters: SetuProvider, RazorpayProvider, CashfreeProvider.
+/// Implementations: [SandboxPaymentProvider], [RazorpayPaymentProvider].
 ///
 /// Note: Secrets (API keys, client secrets, webhook secrets) must NEVER be
 /// stored in or accessed directly by client-side code.
 abstract class PaymentProvider {
-  /// Name or identifier of this payment provider (e.g. 'sandbox', 'setu', 'razorpay').
+  /// Name or identifier of this payment provider (e.g. 'sandbox', 'razorpay').
   String get providerName;
 
-  /// Creates a payment intent for a crew member's contribution.
-  /// Generates UPI intent URL / QR payload for external payment initiation.
+  /// Creates a payment intent/order for a crew member's contribution.
+  /// Generates payment intent payload for external payment initiation.
   Future<PaymentIntent> createContributionIntent({
     required String tripId,
     required String uid,

@@ -43,6 +43,40 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
     }
   }
 
+  Future<void> _handleGoogleSignIn() async {
+    try {
+      final success = await ref.read(authProvider.notifier).signInWithGoogle();
+      if (success && mounted) {
+        context.go('/');
+      } else if (mounted) {
+        final error = ref.read(authProvider).error;
+        if (error != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(error.message),
+              backgroundColor: Theme.of(context).colorScheme.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        final isApiException10 = e.toString().contains('10');
+        final message = isApiException10
+            ? 'Google Sign-In configuration error (ApiException: 10). Please check app setup.'
+            : 'Google Sign-In failed: ${e.toString()}';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Theme.of(context).colorScheme.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -198,15 +232,7 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
                   children: [
                     _buildSocialButton(
                       icon: Icons.g_mobiledata,
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Google sign-in will be enabled with production OAuth client ID.',
-                            ),
-                          ),
-                        );
-                      },
+                      onPressed: authState.isLoading ? null : _handleGoogleSignIn,
                     ),
                     const SizedBox(width: AppConstants.spaceMd),
                     _buildSocialButton(
@@ -243,7 +269,7 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
 
   Widget _buildSocialButton({
     required IconData icon,
-    required VoidCallback onPressed,
+    required VoidCallback? onPressed,
   }) {
     return InkWell(
       onTap: onPressed,

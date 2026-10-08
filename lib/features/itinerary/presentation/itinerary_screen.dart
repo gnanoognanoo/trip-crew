@@ -1,17 +1,16 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/itinerary/models/itinerary_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
-/// Screen 8: Itinerary timeline screen connected to real Firestore trips/{tripId}/itinerary.
+/// Screen 8: Itinerary timeline screen connected to Supabase PostgreSQL itinerary_items.
 class ItineraryScreen extends ConsumerStatefulWidget {
   const ItineraryScreen({super.key});
 
@@ -32,46 +31,41 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
     _listenToItinerary();
   }
 
-  void _listenToItinerary() {
+  void _listenToItinerary() async {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
       return;
     }
 
-    if (FirebaseService.isInitialized) {
-      _sub = FirebaseFirestore.instance
-          .collection('trips')
-          .doc(activeTrip.id)
-          .collection('itinerary')
-          .orderBy('order')
-          .snapshots()
-          .listen(
-            (snapshot) {
-              final loaded = snapshot.docs
-                  .map((doc) => ItineraryItem.fromMap(doc.data(), doc.id))
-                  .toList();
+    if (SupabaseService.isInitialized) {
+      try {
+        final res = await SupabaseService.client
+            .from('itinerary_items')
+            .select()
+            .eq('trip_id', activeTrip.id)
+            .order('created_at', ascending: true);
 
-              if (mounted) {
-                setState(() {
-                  _items = loaded;
-                  _isLoading = false;
-                  _errorMessage = null;
-                });
-              }
-            },
-            onError: (e) {
-              if (mounted) {
-                setState(() {
-                  _isLoading = false;
-                  _errorMessage =
-                      'Could not load itinerary. Check your connection.';
-                });
-              }
-            },
-          );
+        final loaded = res
+            .map((doc) => ItineraryItem.fromMap(Map<String, dynamic>.from(doc), doc['id'] as String))
+            .toList();
+
+        if (mounted) {
+          setState(() {
+            _items = loaded;
+            _isLoading = false;
+            _errorMessage = null;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Could not load itinerary. Check your connection.';
+          });
+        }
+      }
     } else {
-      // Local fallback
       setState(() => _isLoading = false);
     }
   }
@@ -139,13 +133,16 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                           order: _items.length + 1,
                         );
 
-                        if (FirebaseService.isInitialized) {
-                          await FirebaseFirestore.instance
-                              .collection('trips')
-                              .doc(tripId)
-                              .collection('itinerary')
-                              .doc(newItem.id)
-                              .set(newItem.toMap());
+                        if (SupabaseService.isInitialized) {
+                          await SupabaseService.client.from('itinerary_items').insert({
+                            'id': newItem.id,
+                            'trip_id': tripId,
+                            'title': newItem.title,
+                            'location': newItem.placeName,
+                            'is_completed': false,
+                            'created_at': DateTime.now().toIso8601String(),
+                          });
+                          setState(() => _items.add(newItem));
                         } else {
                           setState(() => _items.add(newItem));
                         }
@@ -180,18 +177,24 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
   }
 
   void _toggleVisited(ItineraryItem item, String tripId) async {
-    if (FirebaseService.isInitialized) {
-      await FirebaseFirestore.instance
-          .collection('trips')
-          .doc(tripId)
-          .collection('itinerary')
-          .doc(item.id)
-          .update({'isVisited': !item.isVisited});
+    final nextState = !item.isVisited;
+    if (SupabaseService.isInitialized) {
+      await SupabaseService.client
+          .from('itinerary_items')
+          .update({'is_completed': nextState})
+          .eq('id', item.id);
+
+      setState(() {
+        final idx = _items.indexWhere((i) => i.id == item.id);
+        if (idx != -1) {
+          _items[idx] = item.copyWith(isVisited: nextState);
+        }
+      });
     } else {
       setState(() {
         final idx = _items.indexWhere((i) => i.id == item.id);
         if (idx != -1) {
-          _items[idx] = item.copyWith(isVisited: !item.isVisited);
+          _items[idx] = item.copyWith(isVisited: nextState);
         }
       });
     }
@@ -224,7 +227,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Subheader
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppConstants.spaceLg,
@@ -265,7 +267,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
             ),
             const SizedBox(height: AppConstants.spaceMd),
 
-            // Day Selector Tabs
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(
@@ -282,7 +283,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
             ),
             const SizedBox(height: AppConstants.spaceLg),
 
-            // Timeline Items
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -328,7 +328,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                         return Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Timeline Axis
                             Column(
                               children: [
                                 InkWell(
@@ -375,7 +374,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                             ),
                             const SizedBox(width: AppConstants.spaceMd),
 
-                            // Content Details
                             Expanded(
                               child: Padding(
                                 padding: const EdgeInsets.only(
@@ -425,7 +423,6 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                     ),
             ),
 
-            // Bottom Add Activity Button
             Padding(
               padding: const EdgeInsets.all(AppConstants.spaceLg),
               child: SizedBox(

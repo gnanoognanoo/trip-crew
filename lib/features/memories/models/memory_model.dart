@@ -1,6 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-
-/// Domain model representing a shared trip memory in Firestore `trips/{tripId}/memories/{memoryId}`.
+/// Domain model representing a shared trip memory in memories table.
 ///
 /// Stores Cloudinary media references and trip metadata:
 /// [tripId], [uploaderId], [imageUrl], [publicId], [caption], [createdAt], [capturedAt], [dayIndex].
@@ -31,15 +29,10 @@ class MemoryModel {
     DateTime? capturedAt,
   }) : capturedAt = capturedAt ?? createdAt;
 
-  /// Backwards-compatible alias for [imageUrl].
   String get mediaUrl => imageUrl;
-
-  /// Backwards-compatible alias for [dayIndex].
   int get dayNumber => dayIndex;
 
-  /// Converts the model into a map for local serialization or Firestore.
-  /// If [useServerTimestamp] is true, `createdAt` uses Firestore's `FieldValue.serverTimestamp()`.
-  Map<String, dynamic> toFirestoreMap({bool useServerTimestamp = false}) {
+  Map<String, dynamic> toMap() {
     return {
       'id': id,
       'tripId': tripId,
@@ -50,48 +43,38 @@ class MemoryModel {
       'mediaType': mediaType,
       'dayIndex': dayIndex,
       'caption': caption,
-      'createdAt': useServerTimestamp
-          ? FieldValue.serverTimestamp()
-          : createdAt.toIso8601String(),
+      'createdAt': createdAt.toIso8601String(),
       'capturedAt': capturedAt.toIso8601String(),
     };
   }
 
-  Map<String, dynamic> toMap() => toFirestoreMap(useServerTimestamp: false);
+  Map<String, dynamic> toFirestoreMap({bool useServerTimestamp = false}) => toMap();
 
   factory MemoryModel.fromMap(Map<String, dynamic> map, String id) {
-    // Robust date parsing supporting Firestore Timestamp, ISO string, and int epoch
     DateTime parseDateTime(dynamic raw, DateTime fallback) {
-      if (raw is Timestamp) return raw.toDate();
       if (raw is String) return DateTime.tryParse(raw) ?? fallback;
       if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);
       return fallback;
     }
 
     final fallbackNow = DateTime.now();
-    final created = parseDateTime(map['createdAt'], fallbackNow);
-    final captured = parseDateTime(map['capturedAt'], created);
+    final created = parseDateTime(map['createdAt'] ?? map['created_at'], fallbackNow);
+    final captured = parseDateTime(map['capturedAt'] ?? map['captured_at'], created);
 
-    // Prefer imageUrl; fallback to legacy mediaUrl
-    final resolvedUrl = (map['imageUrl'] as String?)?.isNotEmpty == true
-        ? map['imageUrl'] as String
-        : (map['mediaUrl'] as String? ?? '');
+    final resolvedUrl = (map['imageUrl'] ?? map['media_url'] ?? map['mediaUrl']) as String? ?? '';
 
-    // Prefer dayIndex; fallback to legacy dayNumber
     final resolvedDay =
-        (map['dayIndex'] as num?)?.toInt() ??
-        (map['dayNumber'] as num?)?.toInt() ??
-        1;
+        (map['dayIndex'] ?? map['day_index'] ?? map['dayNumber']) as num? ?? 1;
 
     return MemoryModel(
       id: id,
-      tripId: map['tripId'] as String? ?? '',
-      uploaderId: map['uploaderId'] as String? ?? '',
-      photographerName: map['photographerName'] as String? ?? 'Crew Member',
+      tripId: (map['tripId'] ?? map['trip_id']) as String? ?? '',
+      uploaderId: (map['uploaderId'] ?? map['user_id'] ?? map['uploader_id']) as String? ?? '',
+      photographerName: (map['photographerName'] ?? map['photographer_name']) as String? ?? 'Crew Member',
       imageUrl: resolvedUrl,
-      publicId: map['publicId'] as String? ?? '',
-      mediaType: map['mediaType'] as String? ?? 'photo',
-      dayIndex: resolvedDay,
+      publicId: (map['publicId'] ?? map['cloudinary_public_id']) as String? ?? '',
+      mediaType: (map['mediaType'] ?? map['media_type']) as String? ?? 'photo',
+      dayIndex: resolvedDay.toInt(),
       caption: map['caption'] as String?,
       createdAt: created,
       capturedAt: captured,

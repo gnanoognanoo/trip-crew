@@ -31,14 +31,16 @@ class CrewMember {
 
   factory CrewMember.fromMap(Map<String, dynamic> map, String id) {
     return CrewMember(
-      uid: id,
-      displayName: map['displayName'] as String? ?? 'Member',
+      uid: (map['uid'] ?? map['user_id'] ?? id) as String,
+      displayName: (map['displayName'] ?? map['display_name']) as String? ?? 'Member',
       role: map['role'] as String? ?? 'member',
-      photoUrl: map['photoUrl'] as String?,
+      photoUrl: (map['photoUrl'] ?? map['photo_url']) as String?,
       isOnline: map['isOnline'] as bool? ?? true,
       joinedAt: map['joinedAt'] != null
           ? DateTime.tryParse(map['joinedAt'].toString()) ?? DateTime.now()
-          : DateTime.now(),
+          : (map['joined_at'] != null
+              ? DateTime.tryParse(map['joined_at'].toString()) ?? DateTime.now()
+              : DateTime.now()),
     );
   }
 }

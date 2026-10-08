@@ -17,6 +17,8 @@ import 'package:tripcrew/features/trip_pay/providers/payment_provider.dart';
 /// - failed
 /// - expired / timeout
 class SandboxPaymentProvider implements PaymentProvider {
+  static final Map<String, PaymentStatus> _intentStatuses = {};
+
   PaymentStatus simulatedStatus;
   Duration simulatedDelay;
 
@@ -24,6 +26,14 @@ class SandboxPaymentProvider implements PaymentProvider {
     this.simulatedStatus = PaymentStatus.success,
     this.simulatedDelay = const Duration(milliseconds: 300),
   });
+
+  /// Updates simulated status for a specific payment intent ID or globally.
+  void setSimulatedStatus(PaymentStatus status, {String? paymentIntentId}) {
+    simulatedStatus = status;
+    if (paymentIntentId != null && paymentIntentId.isNotEmpty) {
+      _intentStatuses[paymentIntentId] = status;
+    }
+  }
 
   @override
   String get providerName => 'sandbox';
@@ -51,6 +61,9 @@ class SandboxPaymentProvider implements PaymentProvider {
     final upiUrl =
         'upi://pay?pa=tripcrew.sandbox@upi&pn=TripCrew%20Trip%20Pot'
         '&am=$amountRupees&cu=INR&tn=Contribution%20to%20Trip';
+
+    // Store initial pending/success state for intent
+    _intentStatuses[intentId] = simulatedStatus;
 
     return PaymentIntent(
       id: intentId,
@@ -80,7 +93,7 @@ class SandboxPaymentProvider implements PaymentProvider {
     if (simulatedDelay > Duration.zero) {
       await Future.delayed(simulatedDelay);
     }
-    return simulatedStatus;
+    return _intentStatuses[paymentIntentId] ?? simulatedStatus;
   }
 
   @override
@@ -93,6 +106,8 @@ class SandboxPaymentProvider implements PaymentProvider {
     if (simulatedDelay > Duration.zero) {
       await Future.delayed(simulatedDelay);
     }
+
+    final currentStatus = _intentStatuses[paymentIntentId] ?? simulatedStatus;
 
     if (expectedCurrency != 'INR') {
       return PaymentVerification(
@@ -107,7 +122,7 @@ class SandboxPaymentProvider implements PaymentProvider {
       );
     }
 
-    if (simulatedStatus == PaymentStatus.failed) {
+    if (currentStatus == PaymentStatus.failed) {
       return PaymentVerification(
         isVerified: false,
         providerReference: providerReference,
@@ -120,7 +135,7 @@ class SandboxPaymentProvider implements PaymentProvider {
       );
     }
 
-    if (simulatedStatus == PaymentStatus.expired) {
+    if (currentStatus == PaymentStatus.expired) {
       return PaymentVerification(
         isVerified: false,
         providerReference: providerReference,

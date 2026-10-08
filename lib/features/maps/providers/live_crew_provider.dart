@@ -1,8 +1,7 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/services/live_crew_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/maps/models/live_location_model.dart';
 import 'package:tripcrew/features/maps/utils/location_calculator.dart';
@@ -155,8 +154,7 @@ class LiveCrewNotifier extends Notifier<LiveCrewState> {
       return;
     }
 
-    if (!FirebaseService.isInitialized) {
-      // Local development fallback
+    if (!SupabaseService.isInitialized) {
       state = state.copyWith(
         isLoading: false,
         members: [],
@@ -175,51 +173,48 @@ class LiveCrewNotifier extends Notifier<LiveCrewState> {
     _pulsesSub?.cancel();
     _membersSub?.cancel();
 
-    // 1. Listen to trip members to discover all crew members
-    _membersSub = FirebaseFirestore.instance
-        .collection('trips')
-        .doc(activeTrip.id)
-        .collection('members')
-        .snapshots()
-        .listen((snap) {
+    // 1. Listen to trip members
+    _membersSub = SupabaseService.client
+        .from('trip_members')
+        .stream(primaryKey: ['id'])
+        .eq('trip_id', activeTrip.id)
+        .listen((data) {
           _tripMembers.clear();
-          for (final doc in snap.docs) {
-            _tripMembers[doc.id] = doc.data();
+          for (final row in data) {
+            final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+            _tripMembers[uid] = row;
           }
           _rebuildCrewState();
         });
 
-    // 2. Listen to pulses to show member status (Hungry, Break, Tired, Emergency, etc.)
-    _pulsesSub = FirebaseFirestore.instance
-        .collection('trips')
-        .doc(activeTrip.id)
-        .collection('pulses')
-        .snapshots()
-        .listen((snap) {
+    // 2. Listen to pulses
+    _pulsesSub = SupabaseService.client
+        .from('trip_pulses')
+        .stream(primaryKey: ['id'])
+        .eq('trip_id', activeTrip.id)
+        .listen((data) {
           _activePulses.clear();
-          for (final doc in snap.docs) {
-            final pulse = TripPulse.fromMap(doc.data(), doc.id);
+          for (final row in data) {
+            final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+            final pulse = TripPulse.fromMap(row, uid);
             if (pulse.isCurrentlyActive) {
-              _activePulses[doc.id] = pulse;
+              _activePulses[uid] = pulse;
             }
           }
           _rebuildCrewState();
         });
 
-    // 3. Listen to live crew location updates
-    _locationsSub = FirebaseFirestore.instance
-        .collection('trips')
-        .doc(activeTrip.id)
-        .collection('locations')
-        .snapshots()
+    // 3. Listen to live location updates
+    _locationsSub = SupabaseService.client
+        .from('live_locations')
+        .stream(primaryKey: ['id'])
+        .eq('trip_id', activeTrip.id)
         .listen(
-          (snapshot) {
+          (data) {
             _rawLocations.clear();
-            for (final doc in snapshot.docs) {
-              _rawLocations[doc.id] = LiveLocationModel.fromMap(
-                doc.data(),
-                doc.id,
-              );
+            for (final row in data) {
+              final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+              _rawLocations[uid] = LiveLocationModel.fromMap(row, uid);
             }
             _rebuildCrewState();
           },

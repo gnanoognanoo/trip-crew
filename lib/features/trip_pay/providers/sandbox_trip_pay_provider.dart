@@ -1,36 +1,28 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_fee_config.dart';
-import 'package:tripcrew/features/trip_pay/models/trip_pay_summary.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_transaction.dart';
 import 'package:tripcrew/features/trip_pay/providers/trip_pay_provider_interface.dart';
 
 /// Sandbox implementation of [TripPayProvider].
 ///
-/// All transactions are simulated — no real money moves.
-/// Uses Firestore transactions for atomic read-validate-write operations.
-///
-/// IMPORTANT: This provider does NOT move real funds. Every transaction is
-/// created with mode = 'sandbox' and status = 'sandbox_success'.
+/// Executes simulated payments against Supabase PostgreSQL backend.
 class SandboxTripPayProvider implements TripPayProvider {
-  final FirebaseFirestore? _firestoreOverride;
-
-  SandboxTripPayProvider({FirebaseFirestore? firestore})
-    : _firestoreOverride = firestore;
-
-  FirebaseFirestore get _firestore =>
-      _firestoreOverride ?? FirebaseFirestore.instance;
+  SandboxTripPayProvider({dynamic firestore});
 
   /// Verifies user is an active trip member.
   Future<bool> _isTripMember(String tripId, String uid) async {
-    if (!FirebaseService.isInitialized) return true;
-    final memberDoc = await _firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('members')
-        .doc(uid)
-        .get();
-    return memberDoc.exists;
+    if (!SupabaseService.isInitialized) return true;
+    try {
+      final res = await SupabaseService.client
+          .from('trip_members')
+          .select()
+          .eq('trip_id', tripId)
+          .eq('user_id', uid)
+          .maybeSingle();
+      return res != null;
+    } catch (_) {
+      return true;
+    }
   }
 
   /// Checks for duplicate clientRequestId to prevent double-submissions.
@@ -38,29 +30,18 @@ class SandboxTripPayProvider implements TripPayProvider {
     String tripId,
     String clientRequestId,
   ) async {
-    final existing = await _firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('transactions')
-        .where('clientRequestId', isEqualTo: clientRequestId)
-        .limit(1)
-        .get();
-    return existing.docs.isNotEmpty;
-  }
-
-  DocumentReference _summaryRef(String tripId) {
-    return _firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('tripPay')
-        .doc('summary');
-  }
-
-  CollectionReference _transactionsRef(String tripId) {
-    return _firestore
-        .collection('trips')
-        .doc(tripId)
-        .collection('transactions');
+    if (!SupabaseService.isInitialized) return false;
+    try {
+      final res = await SupabaseService.client
+          .from('transactions')
+          .select()
+          .eq('trip_id', tripId)
+          .eq('client_request_id', clientRequestId)
+          .limit(1);
+      return res.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -88,69 +69,77 @@ class SandboxTripPayProvider implements TripPayProvider {
         'tx_${DateTime.now().millisecondsSinceEpoch}_${initiatedByUid.hashCode.abs()}';
     final now = DateTime.now();
 
-    // Atomic Firestore transaction
-    final transaction = await _firestore.runTransaction<TripPayTransaction>((
-      firestoreTx,
-    ) async {
-      // Read current summary
-      final summarySnap = await firestoreTx.get(_summaryRef(tripId));
+    int currentContributed = 0;
+    int currentSpent = 0;
+    int currentAvailable = 0;
 
-      int currentContributed = 0;
-      int currentSpent = 0;
-      int currentAvailable = 0;
+    if (SupabaseService.isInitialized) {
+      try {
+        final summaryRes = await SupabaseService.client
+            .from('trip_pay_summary')
+            .select()
+            .eq('trip_id', tripId)
+            .maybeSingle();
 
-      if (summarySnap.exists && summarySnap.data() != null) {
-        final data = summarySnap.data()! as Map<String, dynamic>;
-        currentContributed =
-            (data['totalContributedPaise'] as num?)?.toInt() ?? 0;
-        currentSpent = (data['totalSpentPaise'] as num?)?.toInt() ?? 0;
-        currentAvailable =
-            (data['availableBalancePaise'] as num?)?.toInt() ?? 0;
-      }
+        if (summaryRes != null) {
+          currentContributed = (summaryRes['total_contributed_paise'] as num?)?.toInt() ?? 0;
+          currentSpent = (summaryRes['total_spent_paise'] as num?)?.toInt() ?? 0;
+          currentAvailable = (summaryRes['available_balance_paise'] as num?)?.toInt() ?? 0;
+        }
+      } catch (_) {}
+    }
 
-      final balanceBefore = currentAvailable;
-      final balanceAfter = currentAvailable + amountPaise;
+    final balanceBefore = currentAvailable;
+    final balanceAfter = currentAvailable + amountPaise;
 
-      final newTx = TripPayTransaction(
-        id: txId,
-        tripId: tripId,
-        type: TripPayTransactionType.contribution,
-        amountPaise: amountPaise,
-        initiatedByUid: initiatedByUid,
-        initiatedByName: initiatedByName,
-        category: 'Contribution',
-        description: '$initiatedByName added money',
-        status: TripPayTransactionStatus.sandboxSuccess,
-        createdAt: now,
-        balanceBeforePaise: balanceBefore,
-        balanceAfterPaise: balanceAfter,
-        calculatedPlatformFeePaise: feePaise,
-        mode: 'sandbox',
-        clientRequestId: clientRequestId,
-      );
+    final newTx = TripPayTransaction(
+      id: txId,
+      tripId: tripId,
+      type: TripPayTransactionType.contribution,
+      amountPaise: amountPaise,
+      initiatedByUid: initiatedByUid,
+      initiatedByName: initiatedByName,
+      category: 'Contribution',
+      description: '$initiatedByName added money',
+      status: TripPayTransactionStatus.sandboxSuccess,
+      createdAt: now,
+      balanceBeforePaise: balanceBefore,
+      balanceAfterPaise: balanceAfter,
+      calculatedPlatformFeePaise: feePaise,
+      mode: 'sandbox',
+      clientRequestId: clientRequestId,
+    );
 
-      // Write transaction
-      firestoreTx.set(_transactionsRef(tripId).doc(txId), newTx.toMap());
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('transactions').insert({
+          'id': txId,
+          'trip_id': tripId,
+          'type': 'CONTRIBUTION',
+          'amount_paise': amountPaise,
+          'initiated_by_user_id': initiatedByUid,
+          'initiated_by_name': initiatedByName,
+          'category': 'Contribution',
+          'description': '$initiatedByName added money',
+          'status': 'SUCCESS',
+          'balance_before_paise': balanceBefore,
+          'balance_after_paise': balanceAfter,
+          'platform_fee_paise': feePaise,
+          'client_request_id': clientRequestId,
+          'created_at': now.toIso8601String(),
+        });
 
-      // Update summary
-      final updatedSummary = TripPaySummary(
-        tripId: tripId,
-        totalContributedPaise: currentContributed + amountPaise,
-        totalSpentPaise: currentSpent,
-        availableBalancePaise: balanceAfter,
-        updatedAt: now,
-      );
+        await SupabaseService.client.from('trip_pay_summary').upsert({
+          'trip_id': tripId,
+          'total_contributed_paise': currentContributed + amountPaise,
+          'total_spent_paise': currentSpent,
+          'available_balance_paise': balanceAfter,
+          'updated_at': now.toIso8601String(),
+        });
+      } catch (_) {}
+    }
 
-      if (summarySnap.exists) {
-        firestoreTx.update(_summaryRef(tripId), updatedSummary.toMap());
-      } else {
-        firestoreTx.set(_summaryRef(tripId), updatedSummary.toMap());
-      }
-
-      return newTx;
-    });
-
-    return transaction;
+    return newTx;
   }
 
   @override
@@ -182,109 +171,93 @@ class SandboxTripPayProvider implements TripPayProvider {
         'exp_${DateTime.now().millisecondsSinceEpoch}_${initiatedByUid.hashCode.abs()}';
     final now = DateTime.now();
 
-    final transaction = await _firestore.runTransaction<TripPayTransaction>((
-      firestoreTx,
-    ) async {
-      // Read current summary
-      final summarySnap = await firestoreTx.get(_summaryRef(tripId));
+    int currentContributed = 0;
+    int currentSpent = 0;
+    int currentAvailable = 0;
 
-      if (!summarySnap.exists || summarySnap.data() == null) {
-        throw StateError(
-          'Trip Pot has not been initialized. Add a contribution first.',
-        );
-      }
+    if (SupabaseService.isInitialized) {
+      try {
+        final summaryRes = await SupabaseService.client
+            .from('trip_pay_summary')
+            .select()
+            .eq('trip_id', tripId)
+            .maybeSingle();
 
-      final data = summarySnap.data()! as Map<String, dynamic>;
-      final currentContributed =
-          (data['totalContributedPaise'] as num?)?.toInt() ?? 0;
-      final currentSpent = (data['totalSpentPaise'] as num?)?.toInt() ?? 0;
-      final currentAvailable =
-          (data['availableBalancePaise'] as num?)?.toInt() ?? 0;
+        if (summaryRes != null) {
+          currentContributed = (summaryRes['total_contributed_paise'] as num?)?.toInt() ?? 0;
+          currentSpent = (summaryRes['total_spent_paise'] as num?)?.toInt() ?? 0;
+          currentAvailable = (summaryRes['available_balance_paise'] as num?)?.toInt() ?? 0;
+        }
+      } catch (_) {}
+    }
 
-      if (amountPaise > currentAvailable) {
-        throw StateError('Insufficient Trip Pot balance.');
-      }
+    if (amountPaise > currentAvailable && SupabaseService.isInitialized) {
+      throw StateError('Insufficient Trip Pot balance.');
+    }
 
-      final balanceBefore = currentAvailable;
-      final balanceAfter = currentAvailable - amountPaise;
+    final balanceBefore = currentAvailable;
+    final balanceAfter = currentAvailable - amountPaise;
 
-      // Read member UIDs for auto-expense participant list
-      final membersSnap = await firestoreTx.get(
-        _firestore
-            .collection('trips')
-            .doc(tripId)
-            .collection('members')
-            .doc(initiatedByUid),
-      );
-      // We verified membership above; just need all member UIDs for expense
-      // Since we can't query inside a transaction, we'll set participants
-      // to just the initiator and let the expense be visible to all members
-      // via the security rules.
+    final newTx = TripPayTransaction(
+      id: txId,
+      tripId: tripId,
+      type: TripPayTransactionType.expense,
+      amountPaise: amountPaise,
+      initiatedByUid: initiatedByUid,
+      initiatedByName: initiatedByName,
+      category: category,
+      description: description,
+      merchantName: merchantName,
+      status: TripPayTransactionStatus.sandboxSuccess,
+      createdAt: now,
+      balanceBeforePaise: balanceBefore,
+      balanceAfterPaise: balanceAfter,
+      relatedExpenseId: expenseId,
+      mode: 'sandbox',
+      clientRequestId: clientRequestId,
+    );
 
-      final newTx = TripPayTransaction(
-        id: txId,
-        tripId: tripId,
-        type: TripPayTransactionType.payment,
-        amountPaise: amountPaise,
-        initiatedByUid: initiatedByUid,
-        initiatedByName: initiatedByName,
-        category: category,
-        description: description,
-        merchantName: merchantName,
-        status: TripPayTransactionStatus.sandboxSuccess,
-        createdAt: now,
-        balanceBeforePaise: balanceBefore,
-        balanceAfterPaise: balanceAfter,
-        relatedExpenseId: expenseId,
-        mode: 'sandbox',
-        clientRequestId: clientRequestId,
-      );
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('transactions').insert({
+          'id': txId,
+          'trip_id': tripId,
+          'type': 'EXPENSE',
+          'amount_paise': amountPaise,
+          'initiated_by_user_id': initiatedByUid,
+          'initiated_by_name': initiatedByName,
+          'category': category,
+          'description': description,
+          'status': 'SUCCESS',
+          'balance_before_paise': balanceBefore,
+          'balance_after_paise': balanceAfter,
+          'client_request_id': clientRequestId,
+          'created_at': now.toIso8601String(),
+        });
 
-      // Write transaction
-      firestoreTx.set(_transactionsRef(tripId).doc(txId), newTx.toMap());
+        await SupabaseService.client.from('trip_pay_summary').upsert({
+          'trip_id': tripId,
+          'total_contributed_paise': currentContributed,
+          'total_spent_paise': currentSpent + amountPaise,
+          'available_balance_paise': balanceAfter,
+          'updated_at': now.toIso8601String(),
+        });
 
-      // Update summary
-      final updatedSummary = TripPaySummary(
-        tripId: tripId,
-        totalContributedPaise: currentContributed,
-        totalSpentPaise: currentSpent + amountPaise,
-        availableBalancePaise: balanceAfter,
-        updatedAt: now,
-      );
-      firestoreTx.update(_summaryRef(tripId), updatedSummary.toMap());
+        await SupabaseService.client.from('expenses').insert({
+          'id': expenseId,
+          'trip_id': tripId,
+          'title': description,
+          'amount_paise': amountPaise,
+          'paid_by_user_id': initiatedByUid,
+          'paid_by_name': '$initiatedByName (Trip Pot)',
+          'category': category,
+          'split_type': 'EQUAL',
+          'created_at': now.toIso8601String(),
+        });
+      } catch (_) {}
+    }
 
-      // Auto-create linked expense
-      final expenseRef = _firestore
-          .collection('trips')
-          .doc(tripId)
-          .collection('expenses')
-          .doc(expenseId);
-
-      firestoreTx.set(expenseRef, {
-        'id': expenseId,
-        'description': description,
-        'amountPaise': amountPaise,
-        'category': category,
-        'paidByUid': initiatedByUid,
-        'paidByName': '$initiatedByName (Trip Pot)',
-        'participantUids': [initiatedByUid],
-        'splitType': 'trip_pot',
-        'createdBy': initiatedByUid,
-        'createdAt': now.toIso8601String(),
-        'source': 'tripcrew_pay',
-        'paymentSource': 'TripCrew Pay',
-        'relatedTransactionId': txId,
-      });
-
-      // Suppress unused variable warning — we validated membership via
-      // the _isTripMember check above. The read here is just to satisfy
-      // Firestore transaction requirements if needed.
-      final _ = membersSnap;
-
-      return newTx;
-    });
-
-    return transaction;
+    return newTx;
   }
 
   @override
@@ -311,58 +284,76 @@ class SandboxTripPayProvider implements TripPayProvider {
     final txId = 'tx_${DateTime.now().millisecondsSinceEpoch}_ref';
     final now = DateTime.now();
 
-    final transaction = await _firestore.runTransaction<TripPayTransaction>((
-      firestoreTx,
-    ) async {
-      final summarySnap = await firestoreTx.get(_summaryRef(tripId));
+    int currentContributed = 0;
+    int currentSpent = 0;
+    int currentAvailable = 0;
 
-      if (!summarySnap.exists || summarySnap.data() == null) {
-        throw StateError('Trip Pot summary not found.');
-      }
+    if (SupabaseService.isInitialized) {
+      try {
+        final summaryRes = await SupabaseService.client
+            .from('trip_pay_summary')
+            .select()
+            .eq('trip_id', tripId)
+            .maybeSingle();
 
-      final data = summarySnap.data()! as Map<String, dynamic>;
-      final currentContributed =
-          (data['totalContributedPaise'] as num?)?.toInt() ?? 0;
-      final currentSpent = (data['totalSpentPaise'] as num?)?.toInt() ?? 0;
-      final currentAvailable =
-          (data['availableBalancePaise'] as num?)?.toInt() ?? 0;
+        if (summaryRes != null) {
+          currentContributed = (summaryRes['total_contributed_paise'] as num?)?.toInt() ?? 0;
+          currentSpent = (summaryRes['total_spent_paise'] as num?)?.toInt() ?? 0;
+          currentAvailable = (summaryRes['available_balance_paise'] as num?)?.toInt() ?? 0;
+        }
+      } catch (_) {}
+    }
 
-      final balanceBefore = currentAvailable;
-      final balanceAfter = currentAvailable + amountPaise;
+    final balanceBefore = currentAvailable;
+    final balanceAfter = currentAvailable + amountPaise;
 
-      final newTx = TripPayTransaction(
-        id: txId,
-        tripId: tripId,
-        type: TripPayTransactionType.refund,
-        amountPaise: amountPaise,
-        initiatedByUid: initiatedByUid,
-        initiatedByName: initiatedByName,
-        category: 'Refund',
-        description: 'Refund for transaction $originalTransactionId',
-        status: TripPayTransactionStatus.sandboxSuccess,
-        createdAt: now,
-        balanceBeforePaise: balanceBefore,
-        balanceAfterPaise: balanceAfter,
-        relatedTransactionId: originalTransactionId,
-        mode: 'sandbox',
-        clientRequestId: clientRequestId,
-      );
+    final newTx = TripPayTransaction(
+      id: txId,
+      tripId: tripId,
+      type: TripPayTransactionType.refund,
+      amountPaise: amountPaise,
+      initiatedByUid: initiatedByUid,
+      initiatedByName: initiatedByName,
+      category: 'Refund',
+      description: 'Refund for transaction $originalTransactionId',
+      status: TripPayTransactionStatus.sandboxSuccess,
+      createdAt: now,
+      balanceBeforePaise: balanceBefore,
+      balanceAfterPaise: balanceAfter,
+      relatedTransactionId: originalTransactionId,
+      mode: 'sandbox',
+      clientRequestId: clientRequestId,
+    );
 
-      firestoreTx.set(_transactionsRef(tripId).doc(txId), newTx.toMap());
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('transactions').insert({
+          'id': txId,
+          'trip_id': tripId,
+          'type': 'REFUND',
+          'amount_paise': amountPaise,
+          'initiated_by_user_id': initiatedByUid,
+          'initiated_by_name': initiatedByName,
+          'category': 'Refund',
+          'description': 'Refund for transaction $originalTransactionId',
+          'status': 'SUCCESS',
+          'balance_before_paise': balanceBefore,
+          'balance_after_paise': balanceAfter,
+          'client_request_id': clientRequestId,
+          'created_at': now.toIso8601String(),
+        });
 
-      final updatedSummary = TripPaySummary(
-        tripId: tripId,
-        totalContributedPaise: currentContributed,
-        totalSpentPaise: currentSpent - amountPaise,
-        availableBalancePaise: balanceAfter,
-        updatedAt: now,
-      );
-      firestoreTx.update(_summaryRef(tripId), updatedSummary.toMap());
+        await SupabaseService.client.from('trip_pay_summary').upsert({
+          'trip_id': tripId,
+          'total_contributed_paise': currentContributed,
+          'total_spent_paise': currentSpent - amountPaise,
+          'available_balance_paise': balanceAfter,
+          'updated_at': now.toIso8601String(),
+        });
+      } catch (_) {}
+    }
 
-      return newTx;
-    });
-
-    return transaction;
+    return newTx;
   }
 
   @override
@@ -370,13 +361,19 @@ class SandboxTripPayProvider implements TripPayProvider {
     String tripId,
     String transactionId,
   ) async {
-    final doc = await _transactionsRef(tripId).doc(transactionId).get();
-    if (!doc.exists) {
-      return TripPayTransactionStatus.failed;
+    if (!SupabaseService.isInitialized) return TripPayTransactionStatus.sandboxSuccess;
+    try {
+      final res = await SupabaseService.client
+          .from('transactions')
+          .select()
+          .eq('trip_id', tripId)
+          .eq('id', transactionId)
+          .maybeSingle();
+
+      if (res == null) return TripPayTransactionStatus.failed;
+      return TripPayTransactionStatus.fromString(res['status'] as String? ?? 'SUCCESS');
+    } catch (_) {
+      return TripPayTransactionStatus.sandboxSuccess;
     }
-    final data = doc.data() as Map<String, dynamic>?;
-    return TripPayTransactionStatus.fromString(
-      data?['status'] as String? ?? 'pending',
-    );
   }
 }
