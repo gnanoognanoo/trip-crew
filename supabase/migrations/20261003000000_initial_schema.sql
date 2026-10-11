@@ -209,10 +209,13 @@ CREATE INDEX IF NOT EXISTS idx_transactions_trip ON transactions(trip_id);
 -- ============================================================
 -- ATOMIC PAYMENT FINALIZATION RPC FUNCTION
 -- ============================================================
+DROP FUNCTION IF EXISTS finalize_payment_attempt(TEXT, TEXT, TEXT, TEXT, BIGINT, TEXT);
+DROP FUNCTION IF EXISTS finalize_payment_attempt(TEXT, TEXT, TEXT, TEXT, BIGINT, TEXT, TEXT);
+
 CREATE OR REPLACE FUNCTION finalize_payment_attempt(
   p_trip_id TEXT,
-  p_payment_intent_id TEXT,
-  p_provider_reference TEXT,
+  p_payment_intent_id TEXT DEFAULT NULL,
+  p_provider_reference TEXT DEFAULT NULL,
   p_initiated_by_name TEXT DEFAULT 'Member',
   p_amount_paise BIGINT DEFAULT 0,
   p_mode TEXT DEFAULT 'live',
@@ -398,21 +401,51 @@ ALTER TABLE trip_pay_summary ENABLE ROW LEVEL SECURITY;
 ALTER TABLE beta_feedback ENABLE ROW LEVEL SECURITY;
 
 -- Permissive client access policies for authenticated/anon application usage
+DROP POLICY IF EXISTS "Allow public read/write for profiles" ON profiles;
 CREATE POLICY "Allow public read/write for profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for trips" ON trips;
 CREATE POLICY "Allow public read/write for trips" ON trips FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for trip_members" ON trip_members;
 CREATE POLICY "Allow public read/write for trip_members" ON trip_members FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for trip_invites" ON trip_invites;
 CREATE POLICY "Allow public read/write for trip_invites" ON trip_invites FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for expenses" ON expenses;
 CREATE POLICY "Allow public read/write for expenses" ON expenses FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for itinerary_items" ON itinerary_items;
 CREATE POLICY "Allow public read/write for itinerary_items" ON itinerary_items FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for checklist_items" ON checklist_items;
 CREATE POLICY "Allow public read/write for checklist_items" ON checklist_items FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for memories" ON memories;
 CREATE POLICY "Allow public read/write for memories" ON memories FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for trip_pulses" ON trip_pulses;
 CREATE POLICY "Allow public read/write for trip_pulses" ON trip_pulses FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for live_locations" ON live_locations;
 CREATE POLICY "Allow public read/write for live_locations" ON live_locations FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public read/write for settlements" ON settlements;
 CREATE POLICY "Allow public read/write for settlements" ON settlements FOR ALL USING (true) WITH CHECK (true);
 
 -- READ ONLY for client on financial ledger tables (updates handled exclusively by server RPC)
+DROP POLICY IF EXISTS "Allow public select for payment_attempts" ON payment_attempts;
 CREATE POLICY "Allow public select for payment_attempts" ON payment_attempts FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow public insert for payment_attempts" ON payment_attempts;
 CREATE POLICY "Allow public insert for payment_attempts" ON payment_attempts FOR INSERT WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Allow public select for transactions" ON transactions;
 CREATE POLICY "Allow public select for transactions" ON transactions FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow public select for trip_pay_summary" ON trip_pay_summary;
 CREATE POLICY "Allow public select for trip_pay_summary" ON trip_pay_summary FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Allow public insert for beta_feedback" ON beta_feedback;
 CREATE POLICY "Allow public insert for beta_feedback" ON beta_feedback FOR ALL USING (true) WITH CHECK (true);

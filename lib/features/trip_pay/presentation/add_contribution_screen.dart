@@ -8,7 +8,6 @@ import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
-import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_status.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_fee_config.dart';
@@ -475,31 +474,39 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
     if (!mounted) return;
     setState(() => _state = _SheetState.verifyingPayment);
 
-    final notifier = ref.read(tripPayProvider.notifier);
-    final providerReference = '$paymentId|$signature|$razorpayOrderId';
+    try {
+      final notifier = ref.read(tripPayProvider.notifier);
+      final providerReference = '$paymentId|$signature|$razorpayOrderId';
 
-    final success = await notifier.verifyAndFinalizeContribution(
-      tripId: widget.tripId,
-      paymentAttemptId: realAttemptId,
-      providerReference: providerReference,
-    );
+      final success = await notifier.verifyAndFinalizeContribution(
+        tripId: widget.tripId,
+        paymentAttemptId: realAttemptId,
+        providerReference: providerReference,
+      );
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    final notifierErr = ref.read(tripPayProvider).error;
-    developer.log(
-      '[PAYMENT_ID_FIX] Flutter state after verification | success=$success | error=$notifierErr',
-      name: 'AddContributionScreen',
-    );
+      final notifierErr = ref.read(tripPayProvider).error;
+      developer.log(
+        '[PAYMENT_ID_FIX] Flutter state after verification | success=$success | error=$notifierErr',
+        name: 'AddContributionScreen',
+      );
 
-    if (success) {
-      setState(() => _state = _SheetState.success);
-      await Future.delayed(const Duration(milliseconds: 900));
-      if (mounted) widget.onSuccess();
-    } else {
+      if (success) {
+        setState(() => _state = _SheetState.success);
+        await Future.delayed(const Duration(milliseconds: 900));
+        if (mounted) widget.onSuccess();
+      } else {
+        setState(() {
+          _state = _SheetState.failed;
+          _errorMessage = notifierErr ?? 'Payment finalization failed. Trip Pot unchanged. Please retry.';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
         _state = _SheetState.failed;
-        _errorMessage = notifierErr ?? 'Payment finalization failed. Trip Pot unchanged. Please retry.';
+        _errorMessage = 'Verification failed: $e. Trip Pot unchanged.';
       });
     }
   }
@@ -526,52 +533,44 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   Future<void> _simulateUpiSuccess() async {
     setState(() => _state = _SheetState.verifyingPayment);
 
-    final notifier = ref.read(tripPayProvider.notifier);
-    final provider = notifier.paymentProvider;
-    if (provider is SandboxPaymentProvider) {
-      provider.setSimulatedStatus(
-        PaymentStatus.success,
-        paymentIntentId: widget.intent.id,
+    final realAttemptId = widget.intent.metadata['paymentAttemptId'] as String? ??
+        widget.intent.metadata['payment_attempt_id'] as String? ??
+        widget.intent.id;
+
+    try {
+      final notifier = ref.read(tripPayProvider.notifier);
+      final provider = notifier.paymentProvider;
+      if (provider is SandboxPaymentProvider) {
+        provider.setSimulatedStatus(
+          PaymentStatus.success,
+          paymentIntentId: widget.intent.id,
+        );
+      }
+
+      final success = await notifier.verifyAndFinalizeContribution(
+        tripId: widget.tripId,
+        paymentAttemptId: realAttemptId,
+        providerReference: 'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
       );
-    }
 
-    final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-    final matchingAttempt = attemptSnap.firstWhere(
-      (a) => a.paymentIntentId == widget.intent.id,
-      orElse: () => attemptSnap.isNotEmpty
-          ? attemptSnap.first
-          : PaymentAttempt(
-              id: 'att_${widget.intent.id.hashCode.abs()}',
-              tripId: widget.tripId,
-              uid: widget.intent.uid,
-              amountPaise: widget.intent.amountPaise,
-              platformFeePaise: widget.intent.platformFeePaise,
-              totalChargePaise: widget.intent.totalChargePaise,
-              provider: 'sandbox',
-              clientRequestId: widget.intent.clientRequestId,
-              paymentIntentId: widget.intent.id,
-              status: PaymentStatus.pending,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-    );
+      if (!mounted) return;
 
-    final success = await notifier.verifyAndFinalizeContribution(
-      tripId: widget.tripId,
-      paymentAttemptId: matchingAttempt.id,
-      providerReference: 'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
-    );
-
-    if (!mounted) return;
-
-    if (success) {
-      setState(() => _state = _SheetState.success);
-      await Future.delayed(const Duration(milliseconds: 900));
-      if (mounted) widget.onSuccess();
-    } else {
+      final notifierErr = ref.read(tripPayProvider).error;
+      if (success) {
+        setState(() => _state = _SheetState.success);
+        await Future.delayed(const Duration(milliseconds: 900));
+        if (mounted) widget.onSuccess();
+      } else {
+        setState(() {
+          _state = _SheetState.failed;
+          _errorMessage = notifierErr ?? 'Provider verification failed. Trip Pot unchanged.';
+        });
+      }
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
         _state = _SheetState.failed;
-        _errorMessage = 'Provider verification failed. Trip Pot unchanged.';
+        _errorMessage = 'Simulation failed: $e. Trip Pot unchanged.';
       });
     }
   }
@@ -579,49 +578,40 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
   Future<void> _simulateUpiDecline() async {
     setState(() => _state = _SheetState.verifyingPayment);
 
-    final notifier = ref.read(tripPayProvider.notifier);
-    final provider = notifier.paymentProvider;
-    if (provider is SandboxPaymentProvider) {
-      provider.setSimulatedStatus(
-        PaymentStatus.failed,
-        paymentIntentId: widget.intent.id,
+    final realAttemptId = widget.intent.metadata['paymentAttemptId'] as String? ??
+        widget.intent.metadata['payment_attempt_id'] as String? ??
+        widget.intent.id;
+
+    try {
+      final notifier = ref.read(tripPayProvider.notifier);
+      final provider = notifier.paymentProvider;
+      if (provider is SandboxPaymentProvider) {
+        provider.setSimulatedStatus(
+          PaymentStatus.failed,
+          paymentIntentId: widget.intent.id,
+        );
+      }
+
+      await notifier.verifyAndFinalizeContribution(
+        tripId: widget.tripId,
+        paymentAttemptId: realAttemptId,
+        providerReference:
+            'declined_ref_${DateTime.now().millisecondsSinceEpoch}',
       );
+
+      if (!mounted) return;
+
+      setState(() {
+        _state = _SheetState.failed;
+        _errorMessage = 'Payment was declined or cancelled. Trip Pot unchanged.';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = _SheetState.failed;
+        _errorMessage = 'Decline error: $e';
+      });
     }
-
-    final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-    final matchingAttempt = attemptSnap.firstWhere(
-      (a) => a.paymentIntentId == widget.intent.id,
-      orElse: () => attemptSnap.isNotEmpty
-          ? attemptSnap.first
-          : PaymentAttempt(
-              id: 'att_${widget.intent.id.hashCode.abs()}',
-              tripId: widget.tripId,
-              uid: widget.intent.uid,
-              amountPaise: widget.intent.amountPaise,
-              platformFeePaise: widget.intent.platformFeePaise,
-              totalChargePaise: widget.intent.totalChargePaise,
-              provider: 'sandbox',
-              clientRequestId: widget.intent.clientRequestId,
-              paymentIntentId: widget.intent.id,
-              status: PaymentStatus.pending,
-              createdAt: DateTime.now(),
-              updatedAt: DateTime.now(),
-            ),
-    );
-
-    await notifier.verifyAndFinalizeContribution(
-      tripId: widget.tripId,
-      paymentAttemptId: matchingAttempt.id,
-      providerReference:
-          'declined_ref_${DateTime.now().millisecondsSinceEpoch}',
-    );
-
-    if (!mounted) return;
-
-    setState(() {
-      _state = _SheetState.failed;
-      _errorMessage = 'Payment was declined or cancelled. Trip Pot unchanged.';
-    });
   }
 
   void _simulateTimeout() {
@@ -640,77 +630,70 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
 
   Future<void> _checkPaymentStatus() async {
     setState(() => _state = _SheetState.verifyingPayment);
-    final notifier = ref.read(tripPayProvider.notifier);
-    final status = await notifier.paymentProvider.fetchPaymentStatus(
-      paymentIntentId: widget.intent.id,
-      providerReference:
-          widget.intent.metadata['platformBillID'] as String? ??
-          widget.intent.id,
-    );
 
-    if (!mounted) return;
+    final realAttemptId = widget.intent.metadata['paymentAttemptId'] as String? ??
+        widget.intent.metadata['payment_attempt_id'] as String? ??
+        widget.intent.id;
 
-    if (status == PaymentStatus.success) {
-      final attemptSnap = ref.read(tripPayProvider).paymentAttempts;
-      final matchingAttempt = attemptSnap.firstWhere(
-        (a) => a.paymentIntentId == widget.intent.id,
-        orElse: () => attemptSnap.isNotEmpty
-            ? attemptSnap.first
-            : PaymentAttempt(
-                id: 'att_${widget.intent.id.hashCode.abs()}',
-                tripId: widget.tripId,
-                uid: widget.intent.uid,
-                amountPaise: widget.intent.amountPaise,
-                platformFeePaise: widget.intent.platformFeePaise,
-                totalChargePaise: widget.intent.totalChargePaise,
-                provider: 'sandbox',
-                clientRequestId: widget.intent.clientRequestId,
-                paymentIntentId: widget.intent.id,
-                status: PaymentStatus.pending,
-                createdAt: DateTime.now(),
-                updatedAt: DateTime.now(),
-              ),
-      );
-
-      final success = await notifier.verifyAndFinalizeContribution(
-        tripId: widget.tripId,
-        paymentAttemptId: matchingAttempt.id,
+    try {
+      final notifier = ref.read(tripPayProvider.notifier);
+      final status = await notifier.paymentProvider.fetchPaymentStatus(
+        paymentIntentId: widget.intent.id,
         providerReference:
             widget.intent.metadata['platformBillID'] as String? ??
-            'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
+            widget.intent.id,
       );
 
       if (!mounted) return;
-      if (success) {
-        setState(() => _state = _SheetState.success);
-        await Future.delayed(const Duration(milliseconds: 900));
-        if (mounted) widget.onSuccess();
-      } else {
+
+      if (status == PaymentStatus.success) {
+        final success = await notifier.verifyAndFinalizeContribution(
+          tripId: widget.tripId,
+          paymentAttemptId: realAttemptId,
+          providerReference:
+              widget.intent.metadata['platformBillID'] as String? ??
+              'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
+        );
+
+        if (!mounted) return;
+        if (success) {
+          setState(() => _state = _SheetState.success);
+          await Future.delayed(const Duration(milliseconds: 900));
+          if (mounted) widget.onSuccess();
+        } else {
+          final notifierErr = ref.read(tripPayProvider).error;
+          setState(() {
+            _state = _SheetState.failed;
+            _errorMessage = notifierErr ?? 'Provider verification failed. Trip Pot unchanged.';
+          });
+        }
+      } else if (status == PaymentStatus.failed) {
         setState(() {
           _state = _SheetState.failed;
-          _errorMessage = 'Provider verification failed. Trip Pot unchanged.';
+          _errorMessage = 'Payment was declined or failed at provider.';
         });
+      } else if (status == PaymentStatus.expired) {
+        setState(() {
+          _state = _SheetState.expired;
+          _errorMessage = 'Payment request has expired.';
+        });
+      } else {
+        setState(() => _state = _SheetState.waitingForPayment);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Waiting for payment confirmation. Please complete in payment app and refresh.',
+            ),
+            duration: Duration(seconds: 2),
+          ),
+        );
       }
-    } else if (status == PaymentStatus.failed) {
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
         _state = _SheetState.failed;
-        _errorMessage = 'Payment was declined or failed at provider.';
+        _errorMessage = 'Check status error: $e';
       });
-    } else if (status == PaymentStatus.expired) {
-      setState(() {
-        _state = _SheetState.expired;
-        _errorMessage = 'Payment request has expired.';
-      });
-    } else {
-      setState(() => _state = _SheetState.waitingForPayment);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Waiting for payment confirmation. Please complete in payment app and refresh.',
-          ),
-          duration: Duration(seconds: 2),
-        ),
-      );
     }
   }
 

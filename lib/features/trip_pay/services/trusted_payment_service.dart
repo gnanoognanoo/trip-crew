@@ -1,17 +1,20 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
+import 'package:http/http.dart' as http;
 import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_attempt.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_status.dart';
+import 'package:tripcrew/features/trip_pay/models/payment_verification.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_fee_config.dart';
 import 'package:tripcrew/features/trip_pay/models/trip_pay_transaction.dart';
 import 'package:tripcrew/features/trip_pay/providers/payment_provider.dart';
 
 /// Trusted payment service enforcing the backend trust boundary.
 ///
-/// Handles payment intent creation and provider verification via Railway.
-/// Financial finalization is executed exclusively by Railway server RPC in Supabase PostgreSQL.
+/// Handles payment intent creation and provider verification via Railway / Supabase Edge Functions.
+/// Financial finalization is executed exclusively by server RPC in Supabase PostgreSQL.
 class TrustedPaymentService {
   final PaymentProvider _paymentProvider;
 
@@ -124,7 +127,7 @@ class TrustedPaymentService {
     );
   }
 
-  /// Step 2: Verifies payment via Railway backend (which executes atomic Supabase RPC finalization).
+  /// Step 2: Verifies payment via trusted backend (which executes atomic Supabase RPC finalization).
   Future<TripPayTransaction?> verifyAndFinalizeContribution({
     required String tripId,
     required String paymentAttemptId,
@@ -155,6 +158,13 @@ class TrustedPaymentService {
     }
 
     if (attempt == null) {
+      if (SupabaseService.isInitialized) {
+        developer.log(
+          '[PAYMENT_ID_FIX] Payment attempt not found in Supabase | paymentAttemptId=$paymentAttemptId | tripId=$tripId',
+          name: 'TrustedPaymentService',
+        );
+        return null;
+      }
       final isRupee2 = paymentAttemptId.contains('rupee2') || providerReference.contains('rupee2');
       final amt = amountPaise ?? (isRupee2 ? 200 : 500000);
       final fee = TripPayFeeConfig.calculateFeePaise(amt);
@@ -187,15 +197,79 @@ class TrustedPaymentService {
       name: 'TrustedPaymentService',
     );
 
-    final verification = await _paymentProvider.verifyPayment(
-      paymentIntentId: attempt.paymentIntentId,
-      providerReference: providerReference,
-      expectedAmountPaise: expectedTotalPaise,
-      expectedCurrency: 'INR',
-      tripId: tripId,
-      initiatedByName: initiatedByName,
-      paymentAttemptId: attempt.id,
-    );
+    PaymentVerification verification;
+    if (_paymentProvider.providerName == 'sandbox' && SupabaseService.isInitialized) {
+      try {
+        final edgeUrl = Uri.parse(
+          '${SupabaseService.defaultUrl.replaceAll(RegExp(r'/$'), '')}/functions/v1/razorpay-verify',
+        );
+        final response = await http.post(
+          edgeUrl,
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': SupabaseService.defaultAnonKey,
+            'Authorization': 'Bearer ${SupabaseService.defaultAnonKey}',
+          },
+          body: jsonEncode({
+            'razorpay_order_id': attempt.paymentIntentId,
+            'razorpay_payment_id': providerReference,
+            'razorpay_signature': 'sandbox_sig',
+            'payment_attempt_id': attempt.id,
+            'expectedAmountPaise': expectedTotalPaise,
+            'expectedCurrency': 'INR',
+            'trip_id': tripId,
+            'user_id': attempt.uid,
+            'initiatedByName': initiatedByName,
+          }),
+        );
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body) as Map<String, dynamic>;
+          verification = PaymentVerification(
+            isVerified: true,
+            providerReference: providerReference,
+            paymentIntentId: attempt.paymentIntentId,
+            status: PaymentStatus.success,
+            amountPaise: expectedTotalPaise,
+            currency: 'INR',
+            verifiedAt: DateTime.now(),
+            rawResponse: data,
+          );
+        } else {
+          final errData = jsonDecode(response.body) as Map<String, dynamic>?;
+          verification = PaymentVerification(
+            isVerified: false,
+            providerReference: providerReference,
+            paymentIntentId: attempt.paymentIntentId,
+            status: PaymentStatus.failed,
+            amountPaise: 0,
+            currency: 'INR',
+            verifiedAt: DateTime.now(),
+            failureReason: errData?['failureReason'] as String? ?? 'Sandbox verification failed: HTTP ${response.statusCode}',
+          );
+        }
+      } catch (e) {
+        verification = PaymentVerification(
+          isVerified: false,
+          providerReference: providerReference,
+          paymentIntentId: attempt.paymentIntentId,
+          status: PaymentStatus.failed,
+          amountPaise: 0,
+          currency: 'INR',
+          verifiedAt: DateTime.now(),
+          failureReason: 'Sandbox verification error: $e',
+        );
+      }
+    } else {
+      verification = await _paymentProvider.verifyPayment(
+        paymentIntentId: attempt.paymentIntentId,
+        providerReference: providerReference,
+        expectedAmountPaise: expectedTotalPaise,
+        expectedCurrency: 'INR',
+        tripId: tripId,
+        initiatedByName: initiatedByName,
+        paymentAttemptId: attempt.id,
+      );
+    }
 
     developer.log(
       '[PAYMENT_ID_FIX] verification result | isVerified=${verification.isVerified} | status=${verification.status} | failureReason=${verification.failureReason}',
@@ -210,11 +284,20 @@ class TrustedPaymentService {
     }
 
     final now = DateTime.now();
-    final txId = 'tx_${now.millisecondsSinceEpoch}_${attempt.uid.hashCode.abs()}';
+    final rawResp = verification.rawResponse;
+    String? verifiedTxId = rawResp['transactionId'] as String?;
+    if (verifiedTxId == null) {
+      final rpc = rawResp['rpcDetails'];
+      if (rpc is Map<String, dynamic>) {
+        verifiedTxId = rpc['transaction_id'] as String?;
+      }
+    }
+    final finalTxId = verifiedTxId ??
+        'tx_${now.millisecondsSinceEpoch}_${attempt.uid.hashCode.abs()}';
 
-    // Construct transaction representation confirmed by Railway + Supabase finalization
+    // Construct transaction representation confirmed by backend finalization
     return TripPayTransaction(
-      id: txId,
+      id: finalTxId,
       tripId: tripId,
       type: TripPayTransactionType.contribution,
       amountPaise: attempt.amountPaise,

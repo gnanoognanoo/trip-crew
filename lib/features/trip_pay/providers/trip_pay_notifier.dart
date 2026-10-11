@@ -297,7 +297,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
 
     final activeTrip = ref.watch(activeTripProvider);
     if (activeTrip != null) {
-      _listenToTripPay(activeTrip.id);
+      Future.microtask(() => _listenToTripPay(activeTrip.id));
       return TripPayState(isLoading: true, providerType: providerType);
     }
     return TripPayState(isLoading: false, providerType: providerType);
@@ -536,6 +536,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
         uid: user.uid,
         userName: user.name,
       );
+      await fetchTripPay(tripId);
     } catch (_) {}
   }
 
