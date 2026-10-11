@@ -48,6 +48,8 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
   int _activeSection = 0; // 0: History, 1: Crew Activity, 2: Settlement
   final _searchController = TextEditingController();
   String _searchQuery = '';
+  bool _isRetryingVerification = false;
+  String? _retryingAttemptId;
 
   @override
   void initState() {
@@ -619,6 +621,9 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
     PaymentAttempt attempt,
     String tripId,
   ) {
+    final isRetryingThis =
+        _isRetryingVerification && _retryingAttemptId == attempt.id;
+
     return Container(
       padding: const EdgeInsets.all(AppConstants.spaceMd),
       decoration: BoxDecoration(
@@ -659,22 +664,80 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
               ],
             ),
           ),
-          TextButton(
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          if (isRetryingThis)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+            )
+          else
+            TextButton(
+              style: TextButton.styleFrom(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _isRetryingVerification
+                  ? null
+                  : () async {
+                      setState(() {
+                        _isRetryingVerification = true;
+                        _retryingAttemptId = attempt.id;
+                      });
+
+                      final success = await ref
+                          .read(tripPayProvider.notifier)
+                          .retryVerifyPendingAttempt(
+                            attempt: attempt,
+                            tripId: tripId,
+                          );
+
+                      if (!mounted) return;
+
+                      final err = ref.read(tripPayProvider).error;
+                      setState(() {
+                        _isRetryingVerification = false;
+                        _retryingAttemptId = null;
+                      });
+
+                      if (success) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Payment verified! ${CurrencyFormatter.formatUnits(attempt.amountPaise)} credited to Trip Pot.',
+                            ),
+                            backgroundColor: const Color(0xFF10B981),
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              err ??
+                                  'Verification retry failed. Please try again.',
+                            ),
+                            backgroundColor: Colors.red.shade700,
+                            action: SnackBarAction(
+                              label: 'Dismiss',
+                              textColor: Colors.white,
+                              onPressed: () {},
+                            ),
+                          ),
+                        );
+                      }
+                    },
+              child: const Text(
+                'Verify Now',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+              ),
             ),
-            onPressed: () {
-              ref
-                  .read(tripPayProvider.notifier)
-                  .recoverPendingPayments(tripId);
-            },
-            child: const Text(
-              'Verify Now',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-          ),
         ],
       ),
     );

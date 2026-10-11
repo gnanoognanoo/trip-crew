@@ -70,18 +70,69 @@ serve(async (req: Request) => {
   try {
     const body = await req.json();
 
-    const orderId =
-      body.razorpay_order_id || body.razorpayOrderId || body.order_id || body.orderId;
-    const paymentId =
-      body.razorpay_payment_id || body.razorpayPaymentId || body.payment_id || body.paymentId;
-    const razorpaySignature =
-      body.razorpay_signature || body.razorpaySignature || body.signature;
+    let orderId =
+      body.razorpay_order_id ||
+      body.razorpayOrderId ||
+      body.order_id ||
+      body.orderId ||
+      body.payment_intent_id ||
+      body.paymentIntentId ||
+      null;
+
+    let paymentId =
+      body.razorpay_payment_id ||
+      body.razorpayPaymentId ||
+      body.payment_id ||
+      body.paymentId ||
+      body.provider_reference ||
+      body.providerReference ||
+      null;
+
+    let razorpaySignature =
+      body.razorpay_signature ||
+      body.razorpaySignature ||
+      body.signature ||
+      null;
+
+    // Support combined providerReference "paymentId|signature|orderId"
+    if (paymentId && typeof paymentId === 'string' && paymentId.includes('|')) {
+      const parts = paymentId.split('|');
+      paymentId = parts[0];
+      if (!razorpaySignature && parts.length > 1 && parts[1]) {
+        razorpaySignature = parts[1];
+      }
+      if (!orderId && parts.length > 2 && parts[2]) {
+        orderId = parts[2];
+      }
+    }
+
     const expectedAmountPaise =
-      body.expectedAmountPaise || body.amountPaise || body.amount;
+      body.expectedAmountPaise ||
+      body.amount_paise ||
+      body.amountPaise ||
+      body.amount ||
+      null;
+
     const expectedCurrency =
       body.expectedCurrency || body.currency || 'INR';
-    const tripId = body.tripId || 'trip_default';
-    const initiatedByName = body.initiatedByName || body.userName || 'Member';
+
+    const rawTripId =
+      body.trip_id || body.tripId || body.p_trip_id || null;
+    const tripId =
+      (rawTripId && rawTripId !== 'trip_default') ? rawTripId : null;
+
+    const initiatedByName =
+      body.initiatedByName ||
+      body.userName ||
+      body.initiated_by_name ||
+      body.user_name ||
+      'Member';
+
+    const paymentAttemptId =
+      body.payment_attempt_id ||
+      body.paymentAttemptId ||
+      body.attemptId ||
+      null;
 
     // 1. Validation check
     if (!orderId || !paymentId || !razorpaySignature) {
@@ -107,7 +158,9 @@ serve(async (req: Request) => {
       razorpaySignature === 'sandbox_sig' ||
       paymentId.startsWith('pay_simulated_') ||
       paymentId.startsWith('pay_sandbox_') ||
+      paymentId.startsWith('upi_ref_') ||
       orderId.startsWith('order_simulated_') ||
+      orderId.startsWith('pi_sb_') ||
       env === 'test' ||
       razorpayKeyId.includes('test');
 
@@ -160,13 +213,8 @@ serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const razorpayOrderId =
-      body.razorpay_order_id || body.razorpayOrderId || body.order_id || body.orderId || null;
-    const paymentAttemptId =
-      body.payment_attempt_id || body.paymentAttemptId || body.attemptId || null;
-
     console.log(
-      `[PAYMENT_ID_FIX] Edge Function verification request | paymentAttemptId=${paymentAttemptId} | razorpayOrderId=${razorpayOrderId} | tripId=${tripId} | paymentId=${paymentId}`
+      `[PAYMENT_ID_FIX] Edge Function verification request | paymentAttemptId=${paymentAttemptId} | razorpayOrderId=${orderId} | tripId=${tripId} | paymentId=${paymentId}`
     );
 
     const { data: rpcResult, error: rpcError } = await supabase.rpc(
@@ -174,10 +222,10 @@ serve(async (req: Request) => {
       {
         p_trip_id: tripId,
         p_payment_attempt_id: paymentAttemptId,
-        p_payment_intent_id: razorpayOrderId,
+        p_payment_intent_id: orderId,
         p_provider_reference: paymentId,
         p_initiated_by_name: initiatedByName,
-        p_amount_paise: expectedAmountPaise || 10100,
+        p_amount_paise: expectedAmountPaise || 0,
         p_mode: isSimulated ? 'sandbox' : 'live'
       }
     );

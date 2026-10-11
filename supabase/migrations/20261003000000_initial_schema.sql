@@ -280,7 +280,7 @@ BEGIN
   END IF;
 
   -- Verify trip_id
-  IF p_trip_id IS NOT NULL AND p_trip_id <> '' AND v_attempt.trip_id <> p_trip_id THEN
+  IF p_trip_id IS NOT NULL AND p_trip_id <> '' AND p_trip_id <> 'trip_default' AND v_attempt.trip_id <> p_trip_id THEN
     RETURN jsonb_build_object(
       'success', false,
       'error', 'TRIP_ID_MISMATCH',

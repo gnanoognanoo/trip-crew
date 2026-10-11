@@ -540,6 +540,38 @@ class TripPayNotifier extends Notifier<TripPayState> {
     } catch (_) {}
   }
 
+  /// Retries verification of a specific pending payment attempt.
+  /// Refreshes state and returns true if verification succeeded, false otherwise.
+  Future<bool> retryVerifyPendingAttempt({
+    required PaymentAttempt attempt,
+    required String tripId,
+  }) async {
+    final user = ref.read(authProvider).user;
+    if (user == null) {
+      state = state.copyWith(error: 'User not authenticated');
+      return false;
+    }
+
+    state = state.copyWith(isProcessing: true, clearError: true);
+    try {
+      await _trustedPaymentService.retryVerifyPendingAttempt(
+        attempt: attempt,
+        tripId: tripId,
+        userName: user.name,
+      );
+      await fetchTripPay(tripId);
+      state = state.copyWith(isProcessing: false, clearError: true);
+      return true;
+    } catch (e) {
+      final errorMsg = e.toString().replaceAll('Exception: ', '');
+      state = state.copyWith(
+        isProcessing: false,
+        error: errorMsg,
+      );
+      return false;
+    }
+  }
+
   /// Adds a contribution to the Trip Pot.
   Future<bool> addContribution({
     required String tripId,

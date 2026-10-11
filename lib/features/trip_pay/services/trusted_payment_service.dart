@@ -280,7 +280,11 @@ class TrustedPaymentService {
         verification.status != PaymentStatus.success ||
         (verification.amountPaise > 0 &&
             verification.amountPaise != expectedTotalPaise)) {
-      return null;
+      final reason = verification.failureReason ??
+          (verification.amountPaise > 0 && verification.amountPaise != expectedTotalPaise
+              ? 'Amount mismatch: expected $expectedTotalPaise paise, received ${verification.amountPaise} paise'
+              : 'Payment verification failed at provider. Trip Pot unchanged.');
+      throw Exception(reason);
     }
 
     final now = DateTime.now();
@@ -360,5 +364,54 @@ class TrustedPaymentService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// Retries verification for an existing pending payment attempt.
+  /// Does not create a new order or recharge the user.
+  Future<TripPayTransaction> retryVerifyPendingAttempt({
+    required PaymentAttempt attempt,
+    required String tripId,
+    required String userName,
+  }) async {
+    String? ref = attempt.providerReference;
+
+    // If providerReference is missing, check provider status
+    if (ref == null || ref.trim().isEmpty) {
+      final status = await _paymentProvider.fetchPaymentStatus(
+        paymentIntentId: attempt.paymentIntentId,
+        providerReference: attempt.providerReference,
+      );
+
+      if (status == PaymentStatus.success) {
+        ref = 'rec_${DateTime.now().millisecondsSinceEpoch}';
+      } else if (status == PaymentStatus.failed) {
+        throw Exception(
+          'Original payment was declined or failed at provider. No funds were added.',
+        );
+      } else if (status == PaymentStatus.expired) {
+        throw Exception(
+          'Payment request expired at provider. Please initiate a new contribution.',
+        );
+      } else {
+        throw Exception(
+          'Payment confirmation data is missing for order ${attempt.paymentIntentId}. '
+          'If money was deducted from your account, please contact support with this order ID.',
+        );
+      }
+    }
+
+    final tx = await verifyAndFinalizeContribution(
+      tripId: tripId,
+      paymentAttemptId: attempt.id,
+      providerReference: ref,
+      initiatedByName: userName,
+      amountPaise: attempt.amountPaise,
+    );
+
+    if (tx == null) {
+      throw Exception('Payment verification could not be finalized. Trip Pot unchanged.');
+    }
+
+    return tx;
   }
 }

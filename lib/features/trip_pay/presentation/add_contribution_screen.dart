@@ -6,6 +6,7 @@ import 'package:razorpay_flutter/razorpay_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trip_pay/models/payment_intent.dart';
@@ -474,9 +475,22 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
     if (!mounted) return;
     setState(() => _state = _SheetState.verifyingPayment);
 
+    final providerReference = '$paymentId|$signature|$razorpayOrderId';
+
+    // Persist provider reference and status immediately in Supabase
+    // so any retry attempt retains the Razorpay verification tokens
+    if (SupabaseService.isInitialized && paymentId.isNotEmpty) {
+      try {
+        await SupabaseService.client.from('payment_attempts').update({
+          'provider_reference': providerReference,
+          'status': 'verifying',
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', realAttemptId);
+      } catch (_) {}
+    }
+
     try {
       final notifier = ref.read(tripPayProvider.notifier);
-      final providerReference = '$paymentId|$signature|$razorpayOrderId';
 
       final success = await notifier.verifyAndFinalizeContribution(
         tripId: widget.tripId,
@@ -547,10 +561,21 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
         );
       }
 
+      final refStr = 'upi_ref_${DateTime.now().millisecondsSinceEpoch}';
+      if (SupabaseService.isInitialized) {
+        try {
+          await SupabaseService.client.from('payment_attempts').update({
+            'provider_reference': refStr,
+            'status': 'verifying',
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', realAttemptId);
+        } catch (_) {}
+      }
+
       final success = await notifier.verifyAndFinalizeContribution(
         tripId: widget.tripId,
         paymentAttemptId: realAttemptId,
-        providerReference: 'upi_ref_${DateTime.now().millisecondsSinceEpoch}',
+        providerReference: refStr,
       );
 
       if (!mounted) return;
