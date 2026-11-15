@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TripCrew — Go Further. Together. | Group Travel App & Pot Payments</title>
+  <meta name="description" content="TripCrew is the ultimate mobile app for group travel planning, shared trip pot payments, real-time live crew coordination, itinerary tracking, and AI travel assistance.">
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:wght@700;800;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --cream: #F8F4EC;
+      --warm-beige: #EADCC8;
+      --sand: #D6C2A5;
+      --espresso: #4B2E21;
+      --mocha: #6F4A37;
+      --caramel: #B9855B;
+      --terracotta: #C97A5B;
+      --sage: #8FAE9D;
+      --white: #FFFFFF;
+      --radius-lg: 20px;
+      --radius-md: 12px;
+      --shadow-soft: 0 10px 30px rgba(75, 46, 33, 0.06);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--cream);
+      color: var(--espresso);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3, .serif {
+      font-family: 'Playfair Display', Georgia, serif;
+    }
+    a { color: var(--caramel); text-decoration: none; transition: all 0.2s; }
+    a:hover { color: var(--espresso); }
+
+    /* Header Nav */
+    header {
+      background: rgba(248, 244, 236, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--sand);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .nav-container {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'Playfair Display', serif;
+      font-size: 24px;
+      font-weight: 900;
+      color: var(--espresso);
+    }
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      background: var(--espresso);
+      color: var(--white);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+    .nav-links {
+      display: flex;
+      gap: 24px;
+      align-items: center;
+    }
+    .nav-links a {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--mocha);
+    }
+    .nav-links a:hover { color: var(--espresso); }
+    .btn-nav {
+      background: var(--espresso);
+      color: var(--white) !important;
+      padding: 10px 20px;
+      border-radius: 24px;
+      font-weight: 700;
+    }
+
+    /* Hero Section */
+    .hero {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 70px 24px 50px;
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      background: var(--warm-beige);
+      color: var(--espresso);
+      border: 1px solid var(--sand);
+      padding: 6px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      font-size: 52px;
+      font-weight: 900;
+      line-height: 1.15;
+      margin-bottom: 20px;
+      color: var(--espresso);
+    }
+    .hero p {
+      font-size: 18px;
+      color: var(--mocha);
+      max-width: 680px;
+      margin: 0 auto 36px;
+    }
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .btn-primary {
+      background: var(--espresso);
+      color: var(--white);
+      padding: 15px 32px;
+      border-radius: 28px;
+      font-size: 16px;
+      font-weight: 800;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(75, 46, 33, 0.25);
+    }
+    .btn-secondary {
+      background: var(--white);
+      color: var(--espresso);
+      padding: 15px 32px;
+      border-radius: 28px;
+      font-size: 16px;
+      font-weight: 700;
+      border: 1px solid var(--sand);
+    }
+
+    /* Features Grid */
+    .section {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 60px 24px;
+    }
+    .section-title {
+      text-align: center;
+      margin-bottom: 45px;
+    }
+    .section-title h2 {
+      font-size: 36px;
+      color: var(--espresso);
+      margin-bottom: 12px;
+    }
+    .section-title p {
+      color: var(--mocha);
+      font-size: 16px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 24px;
+    }
+    .card {
+      background: var(--white);
+      border: 1px solid var(--sand);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      box-shadow: var(--shadow-soft);
+      transition: transform 0.2s ease;
+    }
+    .card:hover { transform: translateY(-4px); }
+    .card-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background: var(--warm-beige);
+      color: var(--espresso);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 18px;
+    }
+    .card h3 {
+      font-size: 21px;
+      margin-bottom: 10px;
+      color: var(--espresso);
+    }
+    .card p {
+      color: var(--mocha);
+      font-size: 14.5px;
+      line-height: 1.6;
+    }
+
+    /* Razorpay Pricing / Payment Transparency */
+    .pricing-box {
+      background: var(--white);
+      border: 1.5px solid var(--sand);
+      border-radius: 24px;
+      padding: 40px;
+      margin-top: 20px;
+      box-shadow: var(--shadow-soft);
+    }
+    .pricing-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 20px;
+      border-bottom: 1px solid var(--sand);
+      padding-bottom: 24px;
+      margin-bottom: 24px;
+    }
+    .pricing-header h3 { font-size: 26px; }
+    .pricing-tag {
+      background: var(--warm-beige);
+      color: var(--espresso);
+      padding: 6px 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .pricing-details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+    }
+    .pricing-item h4 {
+      font-size: 16px;
+      color: var(--espresso);
+      margin-bottom: 6px;
+    }
+    .pricing-item p {
+      font-size: 13.5px;
+      color: var(--mocha);
+    }
+
+    /* Footer & Compliance */
+    footer {
+      background: var(--white);
+      border-top: 1px solid var(--sand);
+      padding: 60px 24px 30px;
+      margin-top: 80px;
+    }
+    .footer-container {
+      max-width: 1140px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1.5fr;
+      gap: 40px;
+    }
+    .footer-col h4 {
+      font-size: 15px;
+      font-weight: 800;
+      color: var(--espresso);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 18px;
+    }
+    .footer-col ul { list-style: none; }
+    .footer-col li { margin-bottom: 10px; }
+    .footer-col a {
+      color: var(--mocha);
+      font-size: 14px;
+    }
+    .footer-col a:hover { color: var(--espresso); }
+    .footer-bottom {
+      max-width: 1140px;
+      margin: 40px auto 0;
+      padding-top: 24px;
+      border-top: 1px solid var(--sand);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--mocha);
+    }
+    .razorpay-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--warm-beige);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--espresso);
+    }
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 38px; }
+      .footer-container { grid-template-columns: 1fr; gap: 30px; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <header>
+    <div class="nav-container">
+      <a href="/" class="brand">
+        <img src="/logo.png" alt="TripCrew Logo" style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--sand);">
+        <span>TripCrew.</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing & Pot</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/refund.html">Refunds</a>
+        <a href="/contact.html">Contact Us</a>
+        <a href="/join" class="btn-nav">Join a Trip</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="badge">Understated Luxury · Group Travel App</div>
+    <h1>Travel Together.<br>Split Expenses Fairly.</h1>
+    <p>
+      TripCrew brings your travel crew together with real-time shared trip pots, 
+      live group maps, day-by-day itineraries, and an intelligent AI travel companion.
+    </p>
+    <div class="hero-actions">
+      <a href="/join" class="btn-primary">Open TripCrew App</a>
+      <a href="#pricing" class="btn-secondary">View Pricing & Payment Terms</a>
+    </div>
+  </section>
+
+  <!-- Features Grid -->
+  <section id="features" class="section">
+    <div class="section-title">
+      <h2>Engineered for Modern Travel Crews</h2>
+      <p>Everything your group needs from departure to settlement</p>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <div class="card-icon">💰</div>
+        <h3>TripCrew Pay & Pot</h3>
+        <p>Pool contributions effortlessly via secure Razorpay UPI, cards, and netbanking. Track the group pot live with immutable transparency.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🗺️</div>
+        <h3>Live Radar & Route</h3>
+        <p>Keep the whole crew connected on the road. Share live GPS location within your private trip perimeter with radar tracking and offline backup.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🤖</div>
+        <h3>AI Travel Assistant</h3>
+        <p>Powered by NVIDIA Nemotron 3.5 Super VL via OpenRouter. Ask about sunrise timings, budget estimates, ticket costs, directions, and switch between top AI models anytime.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">📅</div>
+        <h3>Shared Itinerary</h3>
+        <p>Collaborative time-to-time itineraries with day numbers, directions, notes, and check-offs synchronized in real time across all member phones.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">⚡</div>
+        <h3>Trip Pulse & SOS</h3>
+        <p>Need fuel? Hungry? Want a restroom? Broadcast instant one-tap status pulses to the crew, plus emergency SOS location sharing.</p>
+      </div>
+      <div class="card">
+        <div class="card-icon">🧾</div>
+        <h3>Split & Settle</h3>
+        <p>Eliminate complex post-trip math. View who paid what, who owes whom, and settle debts instantly with integrated UPI deep-links.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing & Razorpay Transparency Section -->
+  <section id="pricing" class="section">
+    <div class="section-title">
+      <h2>Pricing & Payment Transparency</h2>
+      <p>Clear, upfront terms for trip pot pooling and transaction fees</p>
+    </div>
+    <div class="pricing-box">
+      <div class="pricing-header">
+        <div>
+          <h3>Trip Pot Pooling & Payment Processing</h3>
+          <p style="color: var(--mocha); font-size: 14.5px;">Compliant with RBI Payment Aggregator & Merchant Guidelines</p>
+        </div>
+        <div class="pricing-tag">Instant In-App Credit</div>
+      </div>
+      <div class="pricing-details">
+        <div class="pricing-item">
+          <h4>📱 App Usage: 100% Free</h4>
+          <p>Trip creation, member invitations, itinerary building, pulse sharing, and memories are completely free for all travelers.</p>
+        </div>
+        <div class="pricing-item">
+          <h4>💳 Payment Processing (Razorpay)</h4>
+          <p>When travelers contribute funds into the shared trip pot, payments are securely processed through Razorpay via UPI, Debit/Credit Cards, and Netbanking.</p>
+        </div>
+        <div class="pricing-item">
+          <h4>⚖️ Transparent Platform Fee (1%)</h4>
+          <p>A nominal 1% processing & payment gateway infrastructure fee applies to digital pot contributions. There are no hidden subscription charges.</p>
+        </div>
+        <div class="pricing-item">
+          <h4>🛡️ Bank-Grade Security</h4>
+          <p>TripCrew never stores debit/credit card numbers or UPI MPINs. All transactions comply with PCI-DSS standards via Razorpay Payment Gateway.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer & Compliance Links -->
+  <footer>
+    <div class="footer-container">
+      <div class="footer-col">
+        <div class="brand" style="margin-bottom: 14px;">
+          <img src="/logo.png" alt="TripCrew Logo" style="width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 1.5px solid var(--sand);">
+          <span>TripCrew.</span>
+        </div>
+        <p style="color: var(--mocha); font-size: 14px; margin-bottom: 16px;">
+          TripCrew is a collaborative mobile travel companion designed for group journeys, shared expenses, and spontaneous adventures.
+        </p>
+        <div class="razorpay-badge">
+          <span>🔒 Secured by Razorpay Payment Gateway</span>
+        </div>
+      </div>
+
+      <div class="footer-col">
+        <h4>Navigation</h4>
+        <ul>
+          <li><a href="#features">Features</a></li>
+          <li><a href="#pricing">Pricing & Fees</a></li>
+          <li><a href="/join">Join Trip</a></li>
+          <li><a href="/contact.html">Support</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Legal & Policies</h4>
+        <ul>
+          <li><a href="/terms.html">Terms & Conditions</a></li>
+          <li><a href="/privacy.html">Privacy Policy</a></li>
+          <li><a href="/refund.html">Cancellation & Refund</a></li>
+          <li><a href="/shipping.html">Shipping & Fulfillment</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>Contact Merchant</h4>
+        <p style="color: var(--mocha); font-size: 13.5px; line-height: 1.6; margin-bottom: 8px;">
+          <strong>Legal Entity:</strong> TripCrew Technologies<br>
+          <strong>Operating Address:</strong> Avadi, Chennai, Tamil Nadu 600054, India<br>
+          <strong>Support Email:</strong> <a href="mailto:support@tripcrew.app">support@tripcrew.app</a><br>
+          <strong>Phone:</strong> +91 94440 00000
+        </p>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <div>© 2026 TripCrew Technologies. All rights reserved.</div>
+      <div style="display: flex; gap: 20px;">
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/refund.html">Refunds</a>
+        <a href="/contact.html">Contact</a>
+      </div>
+    </div>
+  </footer>
+
+</body>
+</html>

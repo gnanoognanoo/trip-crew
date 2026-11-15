@@ -15,6 +15,8 @@ class MemoryModel {
   final DateTime createdAt;
   final DateTime capturedAt;
 
+  final String? storagePath;
+
   const MemoryModel({
     required this.id,
     required this.tripId,
@@ -22,6 +24,7 @@ class MemoryModel {
     this.photographerName = 'Crew Member',
     required this.imageUrl,
     this.publicId = '',
+    this.storagePath,
     this.mediaType = 'photo',
     this.dayIndex = 1,
     this.caption,
@@ -36,14 +39,23 @@ class MemoryModel {
     return {
       'id': id,
       'tripId': tripId,
+      'trip_id': tripId,
       'uploaderId': uploaderId,
+      'user_id': uploaderId,
       'photographerName': photographerName,
       'imageUrl': imageUrl,
+      'media_url': imageUrl,
       'publicId': publicId,
+      'cloudinary_public_id': publicId,
+      'storagePath': storagePath,
+      'storage_path': storagePath,
       'mediaType': mediaType,
+      'media_type': mediaType,
       'dayIndex': dayIndex,
+      'day_index': dayIndex,
       'caption': caption,
       'createdAt': createdAt.toIso8601String(),
+      'created_at': createdAt.toIso8601String(),
       'capturedAt': capturedAt.toIso8601String(),
     };
   }
@@ -73,6 +85,7 @@ class MemoryModel {
       photographerName: (map['photographerName'] ?? map['photographer_name']) as String? ?? 'Crew Member',
       imageUrl: resolvedUrl,
       publicId: (map['publicId'] ?? map['cloudinary_public_id']) as String? ?? '',
+      storagePath: (map['storagePath'] ?? map['storage_path']) as String?,
       mediaType: (map['mediaType'] ?? map['media_type']) as String? ?? 'photo',
       dayIndex: resolvedDay.toInt(),
       caption: map['caption'] as String?,

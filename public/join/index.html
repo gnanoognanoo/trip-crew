@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TripCrew - Join Trip</title>
+  <style>
+    :root {
+      --bg: #091210;
+      --card-bg: #11221D;
+      --card-border: #1B352E;
+      --primary: #10B981;
+      --primary-hover: #059669;
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 24px;
+      padding: 36px 28px;
+      max-width: 440px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+    }
+    .logo-container {
+      width: 72px;
+      height: 72px;
+      background: linear-gradient(135deg, #10B981, #059669);
+      border-radius: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);
+    }
+    .logo-icon { font-size: 34px; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    p.subtitle {
+      color: var(--text-muted);
+      font-size: 15px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    .code-box {
+      background: #081512;
+      border: 1.5px dashed var(--card-border);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .code-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--primary);
+      font-weight: 700;
+    }
+    .code-value {
+      font-family: monospace;
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: 2.5px;
+      color: #FFFFFF;
+    }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      padding: 15px 20px;
+      border-radius: 14px;
+      font-size: 16px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      border: none;
+      margin-bottom: 12px;
+    }
+    .btn-primary {
+      background: var(--primary);
+      color: #04241B;
+      box-shadow: 0 4px 16px rgba(16, 185, 129, 0.25);
+    }
+    .btn-primary:hover {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    .instructions {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--card-border);
+      text-align: left;
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .instructions ol { padding-left: 20px; }
+    .instructions li { margin-bottom: 8px; }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--primary);
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo-container">
+      <span class="logo-icon">🚀</span>
+    </div>
+    
+    <div id="inviteBadge" class="status-badge" style="display: none;">Trip Invitation</div>
+    <h1 id="title">TripCrew</h1>
+    <p class="subtitle" id="subtitle">Collaborative group travel, shared live GPS map, shared trip budget, and offline itinerary.</p>
+
+    <div class="code-box" id="codeBox" style="display: none;">
+      <span class="code-label">Trip Invite Code</span>
+      <span class="code-value" id="inviteCodeDisplay">--------</span>
+    </div>
+
+    <button id="openAppBtn" class="btn btn-primary" onclick="launchApp()">
+      <span>📲 Open in TripCrew App</span>
+    </button>
+
+    <div class="instructions">
+      <ol>
+        <li>If you have <b>TripCrew</b> installed, tap <b>Open in TripCrew App</b> to join instantly.</li>
+        <li>If you haven't installed it yet, please install the TripCrew APK on your device and enter code <b id="codeInText" style="color:#10B981;"></b>.</li>
+      </ol>
+    </div>
+  </div>
+
+  <script>
+    function getInviteCode() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryCode = urlParams.get('code') || urlParams.get('invite');
+      if (queryCode) return queryCode.trim().toUpperCase();
+
+      const pathParts = window.location.pathname.split('/').filter(Boolean);
+      if (pathParts.length > 0) {
+        const lastPart = pathParts[pathParts.length - 1];
+        if (lastPart.toLowerCase() !== 'join' && lastPart.toLowerCase() !== 'index.html') {
+          return lastPart.trim().toUpperCase();
+        }
+      }
+      return null;
+    }
+
+    const code = getInviteCode();
+
+    if (code) {
+      document.getElementById('inviteBadge').style.display = 'inline-block';
+      document.getElementById('title').textContent = 'Join Trip on TripCrew';
+      document.getElementById('subtitle').textContent = 'You have been invited to collaborate on this trip. Tap below to open directly in the app!';
+      document.getElementById('codeBox').style.display = 'flex';
+      document.getElementById('inviteCodeDisplay').textContent = code;
+      document.getElementById('codeInText').textContent = code;
+    }
+
+    function launchApp() {
+      if (!code) {
+        window.location.href = "tripcrew://";
+        return;
+      }
+      const intentUrl = "intent://join/" + encodeURIComponent(code) + "#Intent;scheme=tripcrew;package=com.tripcrew.travelapp;end;";
+      const schemeUrl = "tripcrew://join/" + encodeURIComponent(code);
+
+      window.location.href = intentUrl;
+      setTimeout(function() {
+        window.location.href = schemeUrl;
+      }, 500);
+    }
+
+    // Auto-launch app immediately when visiting link
+    if (code) {
+      window.addEventListener('DOMContentLoaded', function() {
+        setTimeout(launchApp, 300);
+      });
+    }
+  </script>
+</body>
+</html>

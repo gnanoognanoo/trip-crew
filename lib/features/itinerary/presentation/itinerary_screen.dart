@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
+import 'package:tripcrew/features/ai/presentation/ai_assistant_dialog.dart';
 import 'package:tripcrew/features/itinerary/models/itinerary_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -31,7 +33,7 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
     _listenToItinerary();
   }
 
-  void _listenToItinerary() async {
+  void _listenToItinerary() {
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip == null) {
       setState(() => _isLoading = false);
@@ -40,23 +42,66 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
 
     if (SupabaseService.isInitialized) {
       try {
-        final res = await SupabaseService.client
+        _sub?.cancel();
+        _sub = SupabaseService.client
             .from('itinerary_items')
-            .select()
+            .stream(primaryKey: ['id'])
             .eq('trip_id', activeTrip.id)
-            .order('created_at', ascending: true);
+            .listen(
+              (data) {
+                final loaded = data
+                    .map((doc) => ItineraryItem.fromMap(
+                          Map<String, dynamic>.from(doc),
+                          doc['id'] as String,
+                        ))
+                    .toList();
+                loaded.sort((a, b) {
+                  final dayCmp = a.dayNumber.compareTo(b.dayNumber);
+                  if (dayCmp != 0) return dayCmp;
+                  final orderCmp = a.order.compareTo(b.order);
+                  if (orderCmp != 0) return orderCmp;
+                  return a.time.compareTo(b.time);
+                });
 
-        final loaded = res
-            .map((doc) => ItineraryItem.fromMap(Map<String, dynamic>.from(doc), doc['id'] as String))
-            .toList();
-
-        if (mounted) {
-          setState(() {
-            _items = loaded;
-            _isLoading = false;
-            _errorMessage = null;
-          });
-        }
+                if (mounted) {
+                  setState(() {
+                    _items = loaded;
+                    _isLoading = false;
+                    _errorMessage = null;
+                  });
+                }
+              },
+              onError: (e) async {
+                try {
+                  final res = await SupabaseService.client
+                      .from('itinerary_items')
+                      .select()
+                      .eq('trip_id', activeTrip.id)
+                      .order('created_at', ascending: true);
+                  final loaded = res
+                      .map((doc) => ItineraryItem.fromMap(
+                            Map<String, dynamic>.from(doc),
+                            doc['id'] as String,
+                          ))
+                      .toList();
+                  if (mounted) {
+                    setState(() {
+                      _items = loaded;
+                      _isLoading = false;
+                      _errorMessage = null;
+                    });
+                  }
+                } catch (_) {
+                  if (mounted) {
+                    setState(() {
+                      _isLoading = false;
+                      _errorMessage =
+                          'Could not load itinerary. Check your connection.';
+                    });
+                  }
+                }
+              },
+            );
       } catch (e) {
         if (mounted) {
           setState(() {
@@ -133,15 +178,35 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                           order: _items.length + 1,
                         );
 
+                        final notesPayload = jsonEncode({
+                          'day': newItem.dayNumber,
+                          'time': newItem.time,
+                        });
+
                         if (SupabaseService.isInitialized) {
-                          await SupabaseService.client.from('itinerary_items').insert({
-                            'id': newItem.id,
-                            'trip_id': tripId,
-                            'title': newItem.title,
-                            'location': newItem.placeName,
-                            'is_completed': false,
-                            'created_at': DateTime.now().toIso8601String(),
-                          });
+                          try {
+                            await SupabaseService.client.from('itinerary_items').insert({
+                              'id': newItem.id,
+                              'trip_id': tripId,
+                              'title': newItem.title,
+                              'location': newItem.placeName,
+                              'day_number': newItem.dayNumber,
+                              'time': newItem.time,
+                              'notes': notesPayload,
+                              'is_completed': false,
+                              'created_at': DateTime.now().toIso8601String(),
+                            });
+                          } catch (_) {
+                            await SupabaseService.client.from('itinerary_items').insert({
+                              'id': newItem.id,
+                              'trip_id': tripId,
+                              'title': newItem.title,
+                              'location': newItem.placeName,
+                              'notes': notesPayload,
+                              'is_completed': false,
+                              'created_at': DateTime.now().toIso8601String(),
+                            });
+                          }
                           setState(() => _items.add(newItem));
                         } else {
                           setState(() => _items.add(newItem));
@@ -174,6 +239,179 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
         ),
       ),
     );
+  }
+
+  void _showEditActivityDialog(ItineraryItem item, String tripId) {
+    final titleCtrl = TextEditingController(text: item.title);
+    final timeCtrl = TextEditingController(text: item.time);
+    final placeCtrl = TextEditingController(text: item.placeName ?? '');
+    int day = item.dayNumber;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Activity'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(labelText: 'Activity Name'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: timeCtrl,
+                decoration: const InputDecoration(labelText: 'Time'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: placeCtrl,
+                decoration: const InputDecoration(labelText: 'Location (optional)'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (titleCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        final updated = item.copyWith(
+                          title: titleCtrl.text.trim(),
+                          time: timeCtrl.text.trim(),
+                          placeName: placeCtrl.text.trim().isEmpty
+                              ? null
+                              : placeCtrl.text.trim(),
+                          dayNumber: day,
+                        );
+
+                        final notesPayload = jsonEncode({
+                          'day': updated.dayNumber,
+                          'time': updated.time,
+                        });
+
+                        if (SupabaseService.isInitialized) {
+                          try {
+                            await SupabaseService.client
+                                .from('itinerary_items')
+                                .update({
+                                  'title': updated.title,
+                                  'location': updated.placeName,
+                                  'day_number': updated.dayNumber,
+                                  'time': updated.time,
+                                  'notes': notesPayload,
+                                })
+                                .eq('id', item.id);
+                          } catch (_) {
+                            await SupabaseService.client
+                                .from('itinerary_items')
+                                .update({
+                                  'title': updated.title,
+                                  'location': updated.placeName,
+                                  'notes': notesPayload,
+                                })
+                                .eq('id', item.id);
+                          }
+                        }
+
+                        setState(() {
+                          final idx = _items.indexWhere((i) => i.id == item.id);
+                          if (idx != -1) _items[idx] = updated;
+                        });
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Activity updated successfully!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to update activity: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _deleteActivity(ItineraryItem item, String tripId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Activity?'),
+        content: Text('Are you sure you want to delete "${item.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        if (SupabaseService.isInitialized) {
+          await SupabaseService.client
+              .from('itinerary_items')
+              .delete()
+              .eq('id', item.id);
+        }
+        setState(() {
+          _items.removeWhere((i) => i.id == item.id);
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Activity deleted.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete activity: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   void _toggleVisited(ItineraryItem item, String tripId) async {
@@ -220,8 +458,16 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
         title: const Text('Itinerary'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome_rounded),
+            color: const Color(0xFFFFB800),
+            tooltip: 'AI Trip Packages & Planner',
+            onPressed: () => AiAssistantDialog.show(context),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -379,40 +625,70 @@ class _ItineraryScreenState extends ConsumerState<ItineraryScreen> {
                                 padding: const EdgeInsets.only(
                                   bottom: AppConstants.spaceLg,
                                 ),
-                                child: Column(
+                                child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      item.time,
-                                      style: TextStyle(
-                                        color: theme.colorScheme.primary,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            item.time,
+                                            style: TextStyle(
+                                              color: theme.colorScheme.primary,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            item.title,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 15,
+                                              decoration: item.isVisited
+                                                  ? TextDecoration.lineThrough
+                                                  : TextDecoration.none,
+                                            ),
+                                          ),
+                                          if (item.placeName != null) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              item.placeName!,
+                                              style: TextStyle(
+                                                color: theme
+                                                    .colorScheme
+                                                    .onSurfaceVariant,
+                                                fontSize: 13,
+                                              ),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      item.title,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
-                                        decoration: item.isVisited
-                                            ? TextDecoration.lineThrough
-                                            : TextDecoration.none,
-                                      ),
-                                    ),
-                                    if (item.placeName != null) ...[
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        item.placeName!,
-                                        style: TextStyle(
-                                          color: theme
-                                              .colorScheme
-                                              .onSurfaceVariant,
-                                          fontSize: 13,
+                                    PopupMenuButton<String>(
+                                      icon: const Icon(Icons.more_vert, size: 18),
+                                      onSelected: (val) {
+                                        if (val == 'edit') {
+                                          _showEditActivityDialog(item, activeTrip.id);
+                                        } else if (val == 'delete') {
+                                          _deleteActivity(item, activeTrip.id);
+                                        }
+                                      },
+                                      itemBuilder: (ctx) => [
+                                        const PopupMenuItem(
+                                          value: 'edit',
+                                          child: Text('Edit Activity'),
                                         ),
-                                      ),
-                                    ],
+                                        const PopupMenuItem(
+                                          value: 'delete',
+                                          child: Text(
+                                            'Delete',
+                                            style: TextStyle(color: Colors.red),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
                                 ),
                               ),

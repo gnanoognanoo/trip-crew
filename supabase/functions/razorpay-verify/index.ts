@@ -278,7 +278,7 @@ serve(async (req: Request) => {
       JSON.stringify({
         isVerified: true,
         providerReference: paymentId,
-        paymentIntentId: razorpayOrderId,
+        paymentIntentId: orderId,
         status: 'success',
         amountPaid: expectedAmountPaise || 10100,
         amountPaise: expectedAmountPaise || 10100,

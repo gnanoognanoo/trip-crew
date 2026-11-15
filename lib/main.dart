@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:tripcrew/app/app.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/notification_service.dart';
 import 'package:tripcrew/core/services/supabase_service.dart';
 
 void main() async {
@@ -12,6 +13,9 @@ void main() async {
 
   // Initialize Supabase PostgreSQL Client
   await SupabaseService.initialize();
+
+  // Initialize native OS notification service
+  await NotificationService.instance.initialize();
 
   runApp(const ProviderScope(child: TripCrewApp()));
 }

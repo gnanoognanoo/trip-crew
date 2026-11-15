@@ -148,28 +148,39 @@ class TripPulse {
       'id': '${tripId ?? ''}_$uid',
       if (tripId != null) 'trip_id': tripId,
       'user_id': uid,
-      'uid': uid,
       'user_name': memberName,
-      'memberName': memberName,
       'pulse_type': pulseType,
-      'pulseType': pulseType,
       'type': type,
       'created_at': createdAt.toIso8601String(),
-      'createdAt': createdAt.toIso8601String(),
       'expires_at': expiresAt.toIso8601String(),
-      'expiresAt': expiresAt.toIso8601String(),
       'is_active': isActive,
-      'isActive': isActive,
     };
   }
 
   factory TripPulse.fromMap(Map<String, dynamic> map, String id) {
     DateTime parseDate(dynamic v, DateTime fallback) {
       if (v == null) return fallback;
-      if (v is String) return DateTime.tryParse(v) ?? fallback;
+      if (v is String) {
+        final str = v.trim();
+        final parsed = DateTime.tryParse(str);
+        if (parsed == null) return fallback;
+        final local = parsed.toLocal();
+        // Guard against double timezone shift: a pulse timestamp created recently can never be in the future
+        if (local.isAfter(DateTime.now().add(const Duration(minutes: 2)))) {
+          return parsed;
+        }
+        return local;
+      }
       try {
         final dynamic dyn = v;
-        if (dyn.toDate != null) return dyn.toDate() as DateTime;
+        if (dyn.toDate != null) {
+          final dt = dyn.toDate() as DateTime;
+          final local = dt.toLocal();
+          if (local.isAfter(DateTime.now().add(const Duration(minutes: 2)))) {
+            return dt;
+          }
+          return local;
+        }
       } catch (_) {}
       return fallback;
     }

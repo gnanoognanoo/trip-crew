@@ -48,14 +48,27 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
       try {
         final membersRes = await SupabaseService.client
             .from('trip_members')
-            .select('user_id, role, profiles(display_name)')
+            .select('user_id, role')
             .eq('trip_id', activeTrip.id);
 
         final map = <String, String>{};
+        final uids = membersRes.map((m) => m['user_id'] as String).toSet().toList();
+        if (uids.isNotEmpty) {
+          try {
+            final profilesRes = await SupabaseService.client
+                .from('profiles')
+                .select('id, display_name, full_name')
+                .inFilter('id', uids);
+            for (final p in profilesRes) {
+              final pid = p['id'] as String;
+              final name = p['display_name'] as String? ?? p['full_name'] as String? ?? 'Member';
+              map[pid] = name;
+            }
+          } catch (_) {}
+        }
         for (final m in membersRes) {
           final uid = m['user_id'] as String;
-          final profile = m['profiles'] as Map<String, dynamic>?;
-          map[uid] = profile?['display_name'] as String? ?? 'Member';
+          map.putIfAbsent(uid, () => 'Member');
         }
 
         final expRes = await SupabaseService.client
@@ -293,7 +306,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         title: const Text('Expenses'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
       ),
       body: SafeArea(
@@ -420,12 +433,40 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                                 fontSize: 12,
                               ),
                             ),
-                            trailing: Text(
-                              CurrencyFormatter.formatUnits(exp.amountPaise),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 15,
-                              ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  CurrencyFormatter.formatUnits(exp.amountPaise),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                PopupMenuButton<String>(
+                                  icon: const Icon(Icons.more_vert, size: 18),
+                                  onSelected: (val) {
+                                    if (val == 'edit') {
+                                      _showEditExpenseDialog(exp, activeTrip.id);
+                                    } else if (val == 'delete') {
+                                      _deleteExpense(exp);
+                                    }
+                                  },
+                                  itemBuilder: (ctx) => [
+                                    const PopupMenuItem(
+                                      value: 'edit',
+                                      child: Text('Edit Expense'),
+                                    ),
+                                    const PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text(
+                                        'Delete',
+                                        style: TextStyle(color: Colors.red),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
                             ),
                           );
                         },
@@ -506,15 +547,38 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                                       ],
                                     ),
                                   ),
-                                  Text(
-                                    CurrencyFormatter.formatUnits(
-                                      st.amountPaise,
-                                    ),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      color: Color(0xFFE25B3E),
-                                      fontSize: 16,
-                                    ),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    children: [
+                                      Text(
+                                        CurrencyFormatter.formatUnits(
+                                          st.amountPaise,
+                                        ),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(0xFFE25B3E),
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      FilledButton.tonal(
+                                        onPressed: () => _showSettleUpDialog(st, activeTrip.id),
+                                        style: FilledButton.styleFrom(
+                                          visualDensity: VisualDensity.compact,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 2,
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'Settle Up',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
@@ -604,6 +668,298 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 : theme.colorScheme.onSurfaceVariant,
           ),
         ),
+      ),
+    );
+  }
+
+  void _showEditExpenseDialog(ExpenseModel expense, String tripId) {
+    final descCtrl = TextEditingController(text: expense.description);
+    final amtCtrl = TextEditingController(
+      text: (expense.amountPaise / 100.0).toStringAsFixed(0),
+    );
+    String category = expense.category;
+    String paidBy = expense.paidByUid;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Expense'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: descCtrl,
+                  decoration: const InputDecoration(labelText: 'Description'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: amtCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Amount (₹)',
+                    prefixText: '₹ ',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: category,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  items: const [
+                    DropdownMenuItem(value: 'Food', child: Text('Food')),
+                    DropdownMenuItem(value: 'Stay', child: Text('Stay')),
+                    DropdownMenuItem(value: 'Fuel', child: Text('Fuel')),
+                    DropdownMenuItem(value: 'Travel', child: Text('Travel')),
+                    DropdownMenuItem(value: 'Tickets', child: Text('Tickets')),
+                    DropdownMenuItem(value: 'Shopping', child: Text('Shopping')),
+                    DropdownMenuItem(value: 'General', child: Text('General')),
+                  ],
+                  onChanged: (val) => setDialogState(() => category = val!),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: paidBy,
+                  decoration: const InputDecoration(labelText: 'Paid By'),
+                  items: _memberNames.entries
+                      .map(
+                        (e) => DropdownMenuItem(
+                          value: e.key,
+                          child: Text(e.value),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (val) => setDialogState(() => paidBy = val!),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      final amountPaise =
+                          ((double.tryParse(amtCtrl.text.trim()) ?? 0) * 100).round();
+                      if (descCtrl.text.trim().isEmpty || amountPaise <= 0) {
+                        return;
+                      }
+
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        final payerName = _memberNames[paidBy] ?? 'Member';
+                        if (SupabaseService.isInitialized) {
+                          await SupabaseService.client
+                              .from('expenses')
+                              .update({
+                                'title': descCtrl.text.trim(),
+                                'amount_paise': amountPaise,
+                                'category': category,
+                                'paid_by_user_id': paidBy,
+                                'paid_by_name': payerName,
+                              })
+                              .eq('id', expense.id);
+                        }
+
+                        final updatedExp = expense.copyWith(
+                          description: descCtrl.text.trim(),
+                          amountPaise: amountPaise,
+                          category: category,
+                          paidByUid: paidBy,
+                          paidByName: payerName,
+                        );
+
+                        final idx = _expenses.indexWhere((e) => e.id == expense.id);
+                        if (idx != -1) {
+                          setState(() {
+                            _expenses[idx] = updatedExp;
+                          });
+                        }
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Expense updated successfully!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to update expense: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _deleteExpense(ExpenseModel expense) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Expense?'),
+        content: Text(
+          'Delete "${expense.description}" (${CurrencyFormatter.formatUnits(expense.amountPaise)})?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        if (SupabaseService.isInitialized) {
+          await SupabaseService.client
+              .from('expenses')
+              .delete()
+              .eq('id', expense.id);
+        }
+        setState(() {
+          _expenses.removeWhere((e) => e.id == expense.id);
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Expense deleted.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete expense: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  void _showSettleUpDialog(SettlementTransaction st, String tripId) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Record Settlement?'),
+        content: Text(
+          'Confirm that ${st.fromName} paid ${CurrencyFormatter.formatUnits(st.amountPaise)} directly to ${st.toName} to settle their balance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                final settlementId =
+                    'stl_${DateTime.now().millisecondsSinceEpoch}';
+                if (SupabaseService.isInitialized) {
+                  await SupabaseService.client.from('settlements').insert({
+                    'id': settlementId,
+                    'trip_id': tripId,
+                    'from_user_id': st.fromUid,
+                    'from_user_name': st.fromName,
+                    'to_user_id': st.toUid,
+                    'to_user_name': st.toName,
+                    'amount_paise': st.amountPaise,
+                    'is_settled': true,
+                    'created_at': DateTime.now().toIso8601String(),
+                  });
+                }
+
+                final settlementExpense = ExpenseModel(
+                  id: 'exp_${DateTime.now().millisecondsSinceEpoch}',
+                  description: 'Settlement: ${st.fromName} → ${st.toName}',
+                  amountPaise: st.amountPaise,
+                  category: 'General',
+                  paidByUid: st.fromUid,
+                  paidByName: st.fromName,
+                  participantUids: [st.toUid],
+                  createdBy: st.fromUid,
+                  createdAt: DateTime.now(),
+                );
+
+                if (SupabaseService.isInitialized) {
+                  await SupabaseService.client.from('expenses').insert({
+                    'id': settlementExpense.id,
+                    'trip_id': tripId,
+                    'title': settlementExpense.description,
+                    'amount_paise': settlementExpense.amountPaise,
+                    'paid_by_user_id': settlementExpense.paidByUid,
+                    'paid_by_name': settlementExpense.paidByName,
+                    'category': 'General',
+                    'split_type': 'DIRECT',
+                    'created_at': DateTime.now().toIso8601String(),
+                  });
+                }
+
+                setState(() {
+                  _expenses.insert(0, settlementExpense);
+                });
+
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Settlement of ${CurrencyFormatter.formatUnits(st.amountPaise)} recorded successfully!',
+                      ),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to record settlement: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Confirm Settle Up'),
+          ),
+        ],
       ),
     );
   }

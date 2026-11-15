@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/cloudinary_service.dart';
+import 'package:tripcrew/features/auth/models/user_profile.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/shared/presentation/beta_feedback_sheet.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
@@ -253,6 +254,183 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
+  void _showSettingsModal(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? user,
+  ) {
+    final nameCtrl = TextEditingController(text: user?.name ?? '');
+    final phoneCtrl = TextEditingController(text: user?.phone ?? '');
+    String selectedCurrency = 'INR (₹)';
+    bool isSaving = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (bottomSheetCtx) => StatefulBuilder(
+        builder: (ctx, setModalState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: AppConstants.spaceLg,
+              right: AppConstants.spaceLg,
+              top: AppConstants.spaceLg,
+              bottom:
+                  MediaQuery.of(ctx).viewInsets.bottom + AppConstants.spaceLg,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Profile & Settings',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(bottomSheetCtx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Display Name',
+                      prefixIcon: Icon(Icons.person_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: phoneCtrl,
+                    keyboardType: TextInputType.phone,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone Number (Optional)',
+                      prefixIcon: Icon(Icons.phone_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedCurrency,
+                    decoration: const InputDecoration(
+                      labelText: 'Default Currency',
+                      prefixIcon: Icon(Icons.currency_rupee),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'INR (₹)',
+                        child: Text('INR (₹) - Indian Rupee'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'USD (\$)',
+                        child: Text('USD (\$) - US Dollar'),
+                      ),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setModalState(() => selectedCurrency = val);
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius:
+                          BorderRadius.circular(AppConstants.radiusMd),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.info_outline, size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'TripCrew v1.0.0 (Beta Build) • Logged in as ${user?.email ?? "Traveler"}',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: isSaving
+                          ? null
+                          : () async {
+                              final newName = nameCtrl.text.trim();
+                              if (newName.isEmpty) return;
+                              setModalState(() => isSaving = true);
+                              try {
+                                await ref
+                                    .read(authProvider.notifier)
+                                    .updateProfile(
+                                      name: newName,
+                                      phone: phoneCtrl.text.trim().isEmpty
+                                          ? null
+                                          : phoneCtrl.text.trim(),
+                                    );
+                                if (bottomSheetCtx.mounted) {
+                                  Navigator.pop(bottomSheetCtx);
+                                }
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Profile updated successfully!',
+                                      ),
+                                      backgroundColor: Colors.green,
+                                    ),
+                                  );
+                                }
+                              } catch (e) {
+                                setModalState(() => isSaving = false);
+                                if (bottomSheetCtx.mounted) {
+                                  ScaffoldMessenger.of(
+                                    bottomSheetCtx,
+                                  ).showSnackBar(
+                                    SnackBar(
+                                      content:
+                                          Text('Failed to update profile: $e'),
+                                      backgroundColor: Colors.red,
+                                    ),
+                                  );
+                                }
+                              }
+                            },
+                      child: isSaving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text('Save Changes'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -262,9 +440,11 @@ class ProfileScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('Profile')),
       body: SafeArea(
         child: ListView(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppConstants.spaceLg,
-            vertical: AppConstants.spaceSm,
+          padding: const EdgeInsets.fromLTRB(
+            AppConstants.spaceLg,
+            AppConstants.spaceSm,
+            AppConstants.spaceLg,
+            120,
           ),
           children: [
             // User Avatar & Bio Section
@@ -438,13 +618,7 @@ class ProfileScreen extends ConsumerWidget {
                       style: TextStyle(fontWeight: FontWeight.w600),
                     ),
                     trailing: const Icon(Icons.chevron_right, size: 20),
-                    onTap: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Preferences & Profile settings'),
-                        ),
-                      );
-                    },
+                    onTap: () => _showSettingsModal(context, ref, user),
                   ),
                   Divider(
                     height: 1,

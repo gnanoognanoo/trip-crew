@@ -130,7 +130,12 @@ class TripsScreen extends ConsumerWidget {
     final dateFormat = DateFormat('dd MMM yyyy');
 
     return ListView.builder(
-      padding: const EdgeInsets.all(AppConstants.spaceLg),
+      padding: const EdgeInsets.fromLTRB(
+        AppConstants.spaceLg,
+        AppConstants.spaceLg,
+        AppConstants.spaceLg,
+        120,
+      ),
       itemCount: trips.length,
       itemBuilder: (context, index) {
         final trip = trips[index];
@@ -165,7 +170,91 @@ class TripsScreen extends ConsumerWidget {
                 ),
               ],
             ),
-            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                PopupMenuButton<String>(
+                  icon: const Icon(Icons.more_vert, size: 20),
+                  onSelected: (val) async {
+                    if (val == 'archive') {
+                      final isComp = trip.status == 'completed';
+                      await ref
+                          .read(tripsProvider.notifier)
+                          .setTripStatus(
+                            tripId: trip.id,
+                            status: isComp ? 'active' : 'completed',
+                            isActive: isComp,
+                          );
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              isComp
+                                  ? 'Trip moved to active trips.'
+                                  : 'Trip moved to completed trips.',
+                            ),
+                          ),
+                        );
+                      }
+                    } else if (val == 'delete') {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Delete Trip?'),
+                          content: Text(
+                            'Are you sure you want to delete "${trip.name}"?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('Cancel'),
+                            ),
+                            FilledButton(
+                              style: FilledButton.styleFrom(
+                                backgroundColor: Colors.red,
+                              ),
+                              onPressed: () => Navigator.pop(ctx, true),
+                              child: const Text('Delete'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        await ref
+                            .read(tripsProvider.notifier)
+                            .deleteTrip(trip.id);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Trip deleted.'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    }
+                  },
+                  itemBuilder: (ctx) => [
+                    PopupMenuItem(
+                      value: 'archive',
+                      child: Text(
+                        trip.status == 'completed'
+                            ? 'Reactivate'
+                            : 'Mark Completed',
+                      ),
+                    ),
+                    const PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        'Delete Trip',
+                        style: TextStyle(color: Colors.red),
+                      ),
+                    ),
+                  ],
+                ),
+                const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+              ],
+            ),
             onTap: () {
               ref.read(tripsProvider.notifier).setActiveTrip(trip.id);
               context.push('/workspace');

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
+import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/utils/currency_formatter.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/trip_pay/providers/trip_pay_notifier.dart';
@@ -50,6 +51,11 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
     super.initState();
     _clientRequestId =
         'pay_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
+    });
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip != null) {
       AnalyticsService.logTripPotPaymentStarted(activeTrip.id);
@@ -97,7 +103,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
       return;
     }
 
-    if (!FirebaseService.isInitialized) {
+    if (!FirebaseService.isInitialized && !SupabaseService.isInitialized) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('TripCrew Pay requires an active connection.'),
@@ -131,8 +137,8 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
         ? currentUser!.name
         : 'Crew Member';
 
-    // Execute atomic Firestore transaction & update Riverpod state
-    final success = await ref
+    // Execute atomic spending transaction & update Riverpod state
+    final tx = await ref
         .read(tripPayProvider.notifier)
         .makePayment(
           tripId: activeTrip.id,
@@ -144,8 +150,10 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
         );
 
     if (mounted) {
-      if (success) {
+      if (tx != null) {
         AnalyticsService.logTripPotPaymentCompleted(activeTrip.id);
+        final updatedSummary = ref.read(tripPayProvider).summary;
+        final committedRemaining = tx.balanceAfterPaise;
         setState(() {
           _paymentSuccess = true;
           _lastPaidAmountPaise = amountPaise;
@@ -154,7 +162,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
           _lastPaidCategory = _category;
           _lastPaidTripName = activeTrip.name;
           _lastPaidInitiator = initiatorName;
-          _remainingPotPaise = available - amountPaise;
+          _remainingPotPaise = updatedSummary?.availableBalancePaise ?? committedRemaining;
         });
       } else {
         _clientRequestId =
@@ -169,9 +177,28 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_paymentSuccess) {
-      return _buildSuccessScreen();
-    }
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) return;
+        ScaffoldMessenger.of(context).clearSnackBars();
+        if (_paymentSuccess) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Paid ${CurrencyFormatter.formatUnits(_lastPaidAmountPaise)} to ${_lastPaidMerchant.isNotEmpty ? _lastPaidMerchant : "merchant"} from Trip Pot!',
+              ),
+              backgroundColor: const Color(0xFF10B981),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      },
+      child: _paymentSuccess ? _buildSuccessScreen() : _buildFormScreen(),
+    );
+  }
+
+  Widget _buildFormScreen() {
 
     final tripPayState = ref.watch(tripPayProvider);
     final activeTrip = ref.watch(activeTripProvider);
@@ -555,7 +582,7 @@ class _PayFromPotScreenState extends ConsumerState<PayFromPotScreen> {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: () => context.pop(),
+                  onPressed: () => context.pop(true),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),

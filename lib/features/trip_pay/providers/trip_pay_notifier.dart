@@ -148,7 +148,9 @@ class TripPayState {
             .toList();
       case TripPayFilter.payments:
         return transactions
-            .where((tx) => tx.type == TripPayTransactionType.payment)
+            .where((tx) =>
+                tx.type == TripPayTransactionType.payment ||
+                tx.type == TripPayTransactionType.expense)
             .toList();
       case TripPayFilter.refunds:
         return transactions
@@ -170,24 +172,44 @@ class TripPayState {
 
     for (final tx in transactions) {
       final uid = tx.initiatedByUid;
-      if (tx.type == TripPayTransactionType.contribution &&
-          tx.status == TripPayTransactionStatus.sandboxSuccess) {
-        contributed[uid] = (contributed[uid] ?? 0) + tx.amountPaise;
+      if (tx.status != TripPayTransactionStatus.sandboxSuccess) {
+        continue;
       }
-      if (tx.type == TripPayTransactionType.payment &&
-          tx.status == TripPayTransactionStatus.sandboxSuccess) {
+      if (tx.type == TripPayTransactionType.contribution) {
+        contributed[uid] = (contributed[uid] ?? 0) + tx.amountPaise;
+      } else if (tx.type == TripPayTransactionType.payment ||
+          tx.type == TripPayTransactionType.expense) {
         paymentCount[uid] = (paymentCount[uid] ?? 0) + 1;
         spendingInitiated[uid] = (spendingInitiated[uid] ?? 0) + tx.amountPaise;
       }
     }
 
-    return memberNames.entries.map((entry) {
+    final allUids = <String>{
+      ...memberNames.keys,
+      ...contributed.keys,
+      ...spendingInitiated.keys,
+    };
+
+    return allUids.map((uid) {
+      String displayName = memberNames[uid] ?? '';
+      if (displayName.isEmpty || displayName == 'Member') {
+        for (final t in transactions) {
+          if (t.initiatedByUid == uid && t.initiatedByName.isNotEmpty && t.initiatedByName != 'Member') {
+            displayName = t.initiatedByName;
+            break;
+          }
+        }
+      }
+      if (displayName.isEmpty) {
+        displayName = memberNames[uid] ?? 'Member';
+      }
+
       return MemberContribution(
-        uid: entry.key,
-        displayName: entry.value,
-        totalContributedPaise: contributed[entry.key] ?? 0,
-        paymentsInitiated: paymentCount[entry.key] ?? 0,
-        totalSpendingInitiatedPaise: spendingInitiated[entry.key] ?? 0,
+        uid: uid,
+        displayName: displayName,
+        totalContributedPaise: contributed[uid] ?? 0,
+        paymentsInitiated: paymentCount[uid] ?? 0,
+        totalSpendingInitiatedPaise: spendingInitiated[uid] ?? 0,
       );
     }).toList();
   }
@@ -572,6 +594,26 @@ class TripPayNotifier extends Notifier<TripPayState> {
     }
   }
 
+  /// Safely cancels a pending or unverified payment attempt in Supabase.
+  Future<bool> cancelPendingAttempt({
+    required String attemptId,
+    required String tripId,
+    String reason = 'Cancelled by user',
+  }) async {
+    try {
+      if (SupabaseService.isInitialized) {
+        await SupabaseService.client.rpc('cancel_payment_attempt', params: {
+          'p_attempt_id': attemptId,
+          'p_reason': reason,
+        });
+      }
+      await fetchTripPay(tripId);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Adds a contribution to the Trip Pot.
   Future<bool> addContribution({
     required String tripId,
@@ -613,7 +655,7 @@ class TripPayNotifier extends Notifier<TripPayState> {
   }
 
   /// Initiates a payment from the Trip Pot.
-  Future<bool> makePayment({
+  Future<TripPayTransaction?> makePayment({
     required String tripId,
     required int amountPaise,
     required String description,
@@ -622,11 +664,11 @@ class TripPayNotifier extends Notifier<TripPayState> {
     required String clientRequestId,
   }) async {
     final user = ref.read(authProvider).user;
-    if (user == null) return false;
+    if (user == null) return null;
 
     state = state.copyWith(isProcessing: true, clearError: true);
     try {
-      await _sharedPotProvider.spendFromPot(
+      final tx = await _sharedPotProvider.spendFromPot(
         tripId: tripId,
         amountPaise: amountPaise,
         initiatedByUid: user.uid,
@@ -636,14 +678,15 @@ class TripPayNotifier extends Notifier<TripPayState> {
         merchantName: merchantName,
         clientRequestId: clientRequestId,
       );
+      await fetchTripPay(tripId);
       state = state.copyWith(isProcessing: false);
-      return true;
+      return tx;
     } catch (e) {
       state = state.copyWith(
         isProcessing: false,
-        error: e.toString().replaceAll('Exception: ', ''),
+        error: e.toString().replaceAll('Exception: ', '').replaceAll('StateError: ', ''),
       );
-      return false;
+      return null;
     }
   }
 

@@ -52,6 +52,19 @@ dependencies:
   crypto: ^3.0.3
   razorpay_flutter: ^1.4.7
   supabase_flutter: ^2.8.3
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
+  url_launcher: ^6.3.3
+  share_plus: ^13.3.1
+  shared_preferences: ^2.5.6
+  path_provider: ^2.1.6
+  audioplayers: ^6.8.1
+  record: ^7.1.2
+  flutter_local_notifications: ^22.3.3
+  langchain: ^0.9.0
+  langchain_openai: ^0.9.0
+  langchain_community: ^0.5.0
+  google_fonts: ^8.2.1
 
 dev_dependencies:
   flutter_test:
@@ -76,6 +89,9 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/images/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

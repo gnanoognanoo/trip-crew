@@ -295,7 +295,7 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
         title: const Text('TripCrew Pay'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
         actions: [
           IconButton(
@@ -362,8 +362,15 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                           children: [
                             Expanded(
                               child: FilledButton.icon(
-                                onPressed: () =>
-                                    context.push('/trip-pay/contribute'),
+                                onPressed: () async {
+                                  ScaffoldMessenger.of(context).clearSnackBars();
+                                  final res = await context.push('/trip-pay/contribute');
+                                  if (res == true && mounted) {
+                                    ref
+                                        .read(tripPayProvider.notifier)
+                                        .fetchTripPay(activeTrip.id);
+                                  }
+                                },
                                 icon: const Icon(Icons.add_rounded, size: 18),
                                 label: const Text('Add Your Share'),
                                 style: FilledButton.styleFrom(
@@ -378,7 +385,15 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
                               child: OutlinedButton.icon(
                                 onPressed:
                                     (summary?.availableBalancePaise ?? 0) > 0
-                                    ? () => context.push('/trip-pay/pay')
+                                    ? () async {
+                                        ScaffoldMessenger.of(context).clearSnackBars();
+                                        final res = await context.push('/trip-pay/pay');
+                                        if (res == true && mounted) {
+                                          ref
+                                              .read(tripPayProvider.notifier)
+                                              .fetchTripPay(activeTrip.id);
+                                        }
+                                      }
                                     : null,
                                 icon: const Icon(
                                   Icons.payment_rounded,
@@ -677,66 +692,95 @@ class _TripPayScreenState extends ConsumerState<TripPayScreen> {
               ),
             )
           else
-            TextButton(
-              style: TextButton.styleFrom(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _isRetryingVerification
-                  ? null
-                  : () async {
-                      setState(() {
-                        _isRetryingVerification = true;
-                        _retryingAttemptId = attempt.id;
-                      });
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: _isRetryingVerification
+                      ? null
+                      : () async {
+                          setState(() {
+                            _isRetryingVerification = true;
+                            _retryingAttemptId = attempt.id;
+                          });
 
-                      final success = await ref
-                          .read(tripPayProvider.notifier)
-                          .retryVerifyPendingAttempt(
-                            attempt: attempt,
-                            tripId: tripId,
-                          );
+                          final success = await ref
+                              .read(tripPayProvider.notifier)
+                              .retryVerifyPendingAttempt(
+                                attempt: attempt,
+                                tripId: tripId,
+                              );
 
-                      if (!mounted) return;
+                          if (!mounted) return;
 
-                      final err = ref.read(tripPayProvider).error;
-                      setState(() {
-                        _isRetryingVerification = false;
-                        _retryingAttemptId = null;
-                      });
+                          final err = ref.read(tripPayProvider).error;
+                          setState(() {
+                            _isRetryingVerification = false;
+                            _retryingAttemptId = null;
+                          });
 
-                      if (success) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Payment verified! ${CurrencyFormatter.formatUnits(attempt.amountPaise)} credited to Trip Pot.',
-                            ),
-                            backgroundColor: const Color(0xFF10B981),
-                          ),
+                          if (success) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Payment verified! ${CurrencyFormatter.formatUnits(attempt.amountPaise)} credited to Trip Pot.',
+                                ),
+                                backgroundColor: const Color(0xFF10B981),
+                              ),
+                            );
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  err ??
+                                      'Verification retry failed. Please try again.',
+                                ),
+                                backgroundColor: Colors.red.shade700,
+                                action: SnackBarAction(
+                                  label: 'Dismiss Attempt',
+                                  textColor: Colors.white,
+                                  onPressed: () {
+                                    ref
+                                        .read(tripPayProvider.notifier)
+                                        .cancelPendingAttempt(
+                                          attemptId: attempt.id,
+                                          tripId: tripId,
+                                          reason:
+                                              'Dismissed by user after verification failed',
+                                        );
+                                  },
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                  child: const Text(
+                    'Verify Now',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Dismiss abandoned attempt',
+                  padding: const EdgeInsets.only(left: 4),
+                  constraints: const BoxConstraints(),
+                  icon: const Icon(Icons.close, size: 16, color: Color(0xFF6B7280)),
+                  onPressed: () async {
+                    await ref
+                        .read(tripPayProvider.notifier)
+                        .cancelPendingAttempt(
+                          attemptId: attempt.id,
+                          tripId: tripId,
+                          reason: 'Dismissed by user',
                         );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              err ??
-                                  'Verification retry failed. Please try again.',
-                            ),
-                            backgroundColor: Colors.red.shade700,
-                            action: SnackBarAction(
-                              label: 'Dismiss',
-                              textColor: Colors.white,
-                              onPressed: () {},
-                            ),
-                          ),
-                        );
-                      }
-                    },
-              child: const Text(
-                'Verify Now',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-              ),
+                  },
+                ),
+              ],
             ),
         ],
       ),

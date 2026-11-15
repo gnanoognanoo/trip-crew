@@ -44,18 +44,21 @@ class ChecklistItem {
   }
 
   ChecklistItem copyWith({
+    String? title,
+    String? category,
     bool? isCompleted,
     String? assignedToMemberName,
     String? assignedToUid,
+    bool? isShared,
   }) {
     return ChecklistItem(
       id: id,
-      title: title,
-      category: category,
+      title: title ?? this.title,
+      category: category ?? this.category,
       isCompleted: isCompleted ?? this.isCompleted,
       assignedToMemberName: assignedToMemberName ?? this.assignedToMemberName,
       assignedToUid: assignedToUid ?? this.assignedToUid,
-      isShared: isShared,
+      isShared: isShared ?? this.isShared,
     );
   }
 }

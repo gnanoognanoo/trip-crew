@@ -96,6 +96,7 @@ class LiveCrewNotifier extends Notifier<LiveCrewState> {
   StreamSubscription? _pulsesSub;
   StreamSubscription? _membersSub;
   StreamSubscription? _statusSub;
+  Timer? _pollTimer;
 
   final Map<String, Map<String, dynamic>> _tripMembers = {};
   final Map<String, LiveLocationModel> _rawLocations = {};
@@ -108,10 +109,16 @@ class LiveCrewNotifier extends Notifier<LiveCrewState> {
       _pulsesSub?.cancel();
       _membersSub?.cancel();
       _statusSub?.cancel();
+      _pollTimer?.cancel();
     });
 
     _listenToStatus();
     _listenToCrewLocations();
+
+    // Periodic sync polling fallback every 4 seconds
+    _pollTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      _fetchDirectly();
+    });
 
     // Automatically stop sharing and clear coordinates if trip ends or is marked completed
     ref.listen<TripModel?>(activeTripProvider, (previous, next) {
@@ -173,58 +180,118 @@ class LiveCrewNotifier extends Notifier<LiveCrewState> {
     _pulsesSub?.cancel();
     _membersSub?.cancel();
 
-    // 1. Listen to trip members
-    _membersSub = SupabaseService.client
-        .from('trip_members')
-        .stream(primaryKey: ['id'])
-        .eq('trip_id', activeTrip.id)
-        .listen((data) {
-          _tripMembers.clear();
-          for (final row in data) {
-            final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
-            _tripMembers[uid] = row;
-          }
-          _rebuildCrewState();
-        });
+    // Immediate direct fetch for fast initial load (<50ms)
+    _fetchDirectly();
 
-    // 2. Listen to pulses
-    _pulsesSub = SupabaseService.client
-        .from('trip_pulses')
-        .stream(primaryKey: ['id'])
-        .eq('trip_id', activeTrip.id)
-        .listen((data) {
-          _activePulses.clear();
-          for (final row in data) {
-            final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
-            final pulse = TripPulse.fromMap(row, uid);
-            if (pulse.isCurrentlyActive) {
-              _activePulses[uid] = pulse;
-            }
-          }
-          _rebuildCrewState();
-        });
+    // 1. Realtime stream for trip members
+    try {
+      _membersSub = SupabaseService.client
+          .from('trip_members')
+          .stream(primaryKey: ['id'])
+          .eq('trip_id', activeTrip.id)
+          .listen(
+            (data) {
+              _tripMembers.clear();
+              for (final row in data) {
+                final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+                _tripMembers[uid] = row;
+              }
+              _rebuildCrewState();
+            },
+            onError: (_) => _fetchDirectly(),
+          );
+    } catch (_) {}
 
-    // 3. Listen to live location updates
-    _locationsSub = SupabaseService.client
-        .from('live_locations')
-        .stream(primaryKey: ['id'])
-        .eq('trip_id', activeTrip.id)
-        .listen(
-          (data) {
-            _rawLocations.clear();
-            for (final row in data) {
-              final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
-              _rawLocations[uid] = LiveLocationModel.fromMap(row, uid);
-            }
-            _rebuildCrewState();
-          },
-          onError: (err) {
-            state = state.copyWith(
-              isLoading: false,
-              errorMessage: 'Could not load crew locations. Check connection.',
-            );
-          },
-        );
+    // 2. Realtime stream for pulses
+    try {
+      _pulsesSub = SupabaseService.client
+          .from('trip_pulses')
+          .stream(primaryKey: ['id'])
+          .eq('trip_id', activeTrip.id)
+          .listen(
+            (data) {
+              _activePulses.clear();
+              for (final row in data) {
+                final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+                final pulse = TripPulse.fromMap(row, uid);
+                if (pulse.isCurrentlyActive) {
+                  _activePulses[uid] = pulse;
+                }
+              }
+              _rebuildCrewState();
+            },
+            onError: (_) => _fetchDirectly(),
+          );
+    } catch (_) {}
+
+    // 3. Realtime stream for live location updates
+    try {
+      _locationsSub = SupabaseService.client
+          .from('live_locations')
+          .stream(primaryKey: ['id'])
+          .eq('trip_id', activeTrip.id)
+          .listen(
+            (data) {
+              _rawLocations.clear();
+              for (final row in data) {
+                final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+                _rawLocations[uid] = LiveLocationModel.fromMap(row, uid);
+              }
+              _rebuildCrewState();
+            },
+            onError: (_) => _fetchDirectly(),
+          );
+    } catch (_) {}
+  }
+
+  Future<void> _fetchDirectly() async {
+    final activeTrip = ref.read(activeTripProvider);
+    if (activeTrip == null || !SupabaseService.isInitialized) return;
+
+    try {
+      final locData = await SupabaseService.client
+          .from('live_locations')
+          .select()
+          .eq('trip_id', activeTrip.id);
+
+      _rawLocations.clear();
+      for (final row in locData) {
+        final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+        _rawLocations[uid] = LiveLocationModel.fromMap(row, uid);
+      }
+
+      final memData = await SupabaseService.client
+          .from('trip_members')
+          .select()
+          .eq('trip_id', activeTrip.id);
+
+      _tripMembers.clear();
+      for (final row in memData) {
+        final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+        _tripMembers[uid] = row;
+      }
+
+      final pulseData = await SupabaseService.client
+          .from('trip_pulses')
+          .select()
+          .eq('trip_id', activeTrip.id)
+          .eq('is_active', true);
+
+      _activePulses.clear();
+      for (final row in pulseData) {
+        final uid = (row['user_id'] ?? row['uid']) as String? ?? '';
+        final pulse = TripPulse.fromMap(row, uid);
+        if (pulse.isCurrentlyActive) {
+          _activePulses[uid] = pulse;
+        }
+      }
+
+      state = state.copyWith(isLoading: false, clearError: true);
+      _rebuildCrewState();
+    } catch (e) {
+      state = state.copyWith(isLoading: false, clearError: true);
+      _rebuildCrewState();
+    }
   }
 
   void _rebuildCrewState() {

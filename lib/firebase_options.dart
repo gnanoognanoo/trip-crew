@@ -47,7 +47,7 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCRK0HyIN5JqbdTB0aqo3R3W93gSXnFJOE',
-    appId: '1:540250477392:android:084593c5934d57c8ce9255',
+    appId: '1:540250477392:android:021dcdd5a6a4cf29ce9255',
     messagingSenderId: '540250477392',
     projectId: 'tripcrew-travel-2026',
     storageBucket: 'tripcrew-travel-2026.firebasestorage.app',

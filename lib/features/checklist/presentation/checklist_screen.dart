@@ -2,11 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:tripcrew/app/theme.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/supabase_service.dart';
 import 'package:tripcrew/core/widgets/app_empty_state.dart';
 import 'package:tripcrew/core/widgets/app_error_state.dart';
+import 'package:tripcrew/core/widgets/tripcrew_motion.dart';
 import 'package:tripcrew/features/checklist/models/checklist_item.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
 
@@ -158,14 +160,26 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
                         );
 
                         if (SupabaseService.isInitialized) {
-                          await SupabaseService.client.from('checklist_items').insert({
-                            'id': newItem.id,
-                            'trip_id': tripId,
-                            'title': newItem.title,
-                            'is_completed': false,
-                            'assigned_to_name': assigned,
-                            'created_at': DateTime.now().toIso8601String(),
-                          });
+                          try {
+                            await SupabaseService.client.from('checklist_items').insert({
+                              'id': newItem.id,
+                              'trip_id': tripId,
+                              'title': newItem.title,
+                              'category': newItem.category,
+                              'is_completed': false,
+                              'assigned_to_name': assigned,
+                              'created_at': DateTime.now().toIso8601String(),
+                            });
+                          } catch (_) {
+                            await SupabaseService.client.from('checklist_items').insert({
+                              'id': newItem.id,
+                              'trip_id': tripId,
+                              'title': newItem.title,
+                              'is_completed': false,
+                              'assigned_to_name': assigned,
+                              'created_at': DateTime.now().toIso8601String(),
+                            });
+                          }
                           setState(() => _items.add(newItem));
                         } else {
                           setState(() => _items.add(newItem));
@@ -197,6 +211,199 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
         ),
       ),
     );
+  }
+
+  void _showEditItemDialog(ChecklistItem item, String tripId) {
+    final titleCtrl = TextEditingController(text: item.title);
+    String category = item.category;
+    String? assigned = item.assignedToMemberName;
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Edit Checklist Item'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(labelText: 'Item Name'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: category,
+                decoration: const InputDecoration(labelText: 'Category'),
+                items: const [
+                  DropdownMenuItem(value: 'Clothes', child: Text('Clothes')),
+                  DropdownMenuItem(
+                    value: 'Travel Essentials',
+                    child: Text('Travel Essentials'),
+                  ),
+                  DropdownMenuItem(value: 'Health', child: Text('Health')),
+                  DropdownMenuItem(
+                    value: 'Electronics',
+                    child: Text('Electronics'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Trip Specific',
+                    child: Text('Trip Specific'),
+                  ),
+                ],
+                onChanged: (val) => setDialogState(() => category = val!),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String?>(
+                initialValue: assigned,
+                decoration: const InputDecoration(
+                  labelText: 'Assign To Member (Optional)',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: null,
+                    child: Text('Unassigned / Shared'),
+                  ),
+                  DropdownMenuItem(value: 'Self', child: Text('Myself')),
+                  DropdownMenuItem(
+                    value: 'Crew Member',
+                    child: Text('Crew Member'),
+                  ),
+                ],
+                onChanged: (val) => setDialogState(() => assigned = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (titleCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => isSubmitting = true);
+                      try {
+                        final updated = item.copyWith(
+                          title: titleCtrl.text.trim(),
+                          category: category,
+                          assignedToMemberName: assigned,
+                          isShared: assigned == null,
+                        );
+
+                        if (SupabaseService.isInitialized) {
+                          try {
+                            await SupabaseService.client
+                                .from('checklist_items')
+                                .update({
+                                  'title': updated.title,
+                                  'category': updated.category,
+                                  'assigned_to_name': assigned,
+                                })
+                                .eq('id', item.id);
+                          } catch (_) {
+                            await SupabaseService.client
+                                .from('checklist_items')
+                                .update({
+                                  'title': updated.title,
+                                  'assigned_to_name': assigned,
+                                })
+                                .eq('id', item.id);
+                          }
+                        }
+
+                        setState(() {
+                          final idx = _items.indexWhere((i) => i.id == item.id);
+                          if (idx != -1) _items[idx] = updated;
+                        });
+
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Item updated successfully!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          setDialogState(() => isSubmitting = false);
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to update item: $e'),
+                              backgroundColor: Colors.red,
+                            ),
+                          );
+                        }
+                      }
+                    },
+              child: isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _deleteChecklistItem(ChecklistItem item, String tripId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Item?'),
+        content: Text('Are you sure you want to delete "${item.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      try {
+        if (SupabaseService.isInitialized) {
+          await SupabaseService.client
+              .from('checklist_items')
+              .delete()
+              .eq('id', item.id);
+        }
+        setState(() {
+          _items.removeWhere((i) => i.id == item.id);
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Item deleted.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to delete item: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    }
   }
 
   void _toggleChecklistItem(ChecklistItem item, String tripId) async {
@@ -253,7 +460,7 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
         title: const Text('Packing Checklist'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
       ),
       body: SafeArea(
@@ -332,35 +539,85 @@ class _ChecklistScreenState extends ConsumerState<ChecklistScreen> {
                             Card(
                               child: Column(
                                 children: catItems.map((item) {
-                                  return CheckboxListTile(
-                                    value: item.isCompleted,
-                                    activeColor: const Color(0xFF10B981),
-                                    title: Text(
-                                      item.title,
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        decoration: item.isCompleted
-                                            ? TextDecoration.lineThrough
-                                            : TextDecoration.none,
-                                        color: item.isCompleted
-                                            ? theme.colorScheme.onSurfaceVariant
-                                            : theme.colorScheme.onSurface,
+                                  final isDark = theme.brightness == Brightness.dark;
+                                  return AnimatedContainer(
+                                    duration: MediaQuery.disableAnimationsOf(context)
+                                        ? Duration.zero
+                                        : const Duration(milliseconds: 220),
+                                    decoration: BoxDecoration(
+                                      color: item.isCompleted
+                                          ? (isDark
+                                              ? const Color(0xFF1E2B24)
+                                              : const Color(0xFFF0EDE4))
+                                          : Colors.transparent,
+                                      border: Border(
+                                        bottom: BorderSide(
+                                          color: isDark
+                                              ? AppTheme.borderDark.withValues(alpha: 0.5)
+                                              : AppTheme.borderLight.withValues(alpha: 0.7),
+                                          width: 0.5,
+                                        ),
                                       ),
                                     ),
-                                    subtitle: item.assignedToMemberName != null
-                                        ? Text(
-                                            'Assigned to ${item.assignedToMemberName}',
-                                            style: TextStyle(
-                                              color:
-                                                  theme.colorScheme.secondary,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w500,
+                                    child: TickItemMotion(
+                                      isChecked: item.isCompleted,
+                                      child: CheckboxListTile(
+                                        value: item.isCompleted,
+                                        activeColor: isDark
+                                            ? AppTheme.softSage
+                                            : AppTheme.pine,
+                                        checkColor: Colors.white,
+                                        title: Text(
+                                          item.title,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w600,
+                                            decoration: item.isCompleted
+                                                ? TextDecoration.lineThrough
+                                                : TextDecoration.none,
+                                            color: item.isCompleted
+                                                ? theme.colorScheme.onSurfaceVariant
+                                                : theme.colorScheme.onSurface,
+                                          ),
+                                        ),
+                                        subtitle: item.assignedToMemberName != null
+                                            ? Text(
+                                                'Assigned to ${item.assignedToMemberName}',
+                                                style: TextStyle(
+                                                  color:
+                                                      theme.colorScheme.secondary,
+                                                  fontSize: 12,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              )
+                                            : null,
+                                        secondary: PopupMenuButton<String>(
+                                          icon: const Icon(Icons.more_vert, size: 18),
+                                          onSelected: (val) {
+                                            if (val == 'edit') {
+                                              _showEditItemDialog(item, activeTrip.id);
+                                            } else if (val == 'delete') {
+                                              _deleteChecklistItem(item, activeTrip.id);
+                                            }
+                                          },
+                                          itemBuilder: (ctx) => [
+                                            const PopupMenuItem(
+                                              value: 'edit',
+                                              child: Text('Edit Item'),
                                             ),
-                                          )
-                                        : null,
-                                    onChanged: (_) => _toggleChecklistItem(
-                                      item,
-                                      activeTrip.id,
+                                            const PopupMenuItem(
+                                              value: 'delete',
+                                              child: Text(
+                                                'Delete',
+                                                style: TextStyle(color: Colors.red),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        onChanged: (_) => _toggleChecklistItem(
+                                          item,
+                                          activeTrip.id,
+                                        ),
+                                      ),
                                     ),
                                   );
                                 }).toList(),

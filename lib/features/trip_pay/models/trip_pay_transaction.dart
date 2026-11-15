@@ -21,7 +21,7 @@ enum TripPayTransactionType {
   }
 
   static TripPayTransactionType fromString(String value) {
-    switch (value) {
+    switch (value.trim().toLowerCase()) {
       case 'contribution':
         return TripPayTransactionType.contribution;
       case 'payment':
@@ -72,8 +72,9 @@ enum TripPayTransactionStatus {
   }
 
   static TripPayTransactionStatus fromString(String value) {
-    switch (value) {
+    switch (value.trim().toLowerCase()) {
       case 'sandbox_success':
+      case 'success':
         return TripPayTransactionStatus.sandboxSuccess;
       case 'pending':
         return TripPayTransactionStatus.pending;

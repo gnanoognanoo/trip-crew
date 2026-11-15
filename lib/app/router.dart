@@ -5,6 +5,8 @@ import 'package:tripcrew/features/auth/presentation/auth_gate.dart';
 import 'package:tripcrew/features/auth/presentation/sign_in_screen.dart';
 import 'package:tripcrew/features/auth/presentation/sign_up_screen.dart';
 import 'package:tripcrew/features/auth/presentation/welcome_screen.dart';
+import 'package:tripcrew/features/ai/presentation/ai_assistant_screen.dart';
+import 'package:tripcrew/features/chat/presentation/crew_chat_screen.dart';
 import 'package:tripcrew/features/checklist/presentation/checklist_screen.dart';
 import 'package:tripcrew/features/crew/presentation/crew_screen.dart';
 import 'package:tripcrew/features/expenses/presentation/expenses_screen.dart';
@@ -12,7 +14,7 @@ import 'package:tripcrew/features/explorer/presentation/nearby_explorer_screen.d
 import 'package:tripcrew/features/home/presentation/home_screen.dart';
 import 'package:tripcrew/features/itinerary/presentation/itinerary_screen.dart';
 import 'package:tripcrew/features/maps/presentation/live_crew_location_screen.dart';
-import 'package:tripcrew/features/maps/presentation/map_coming_soon_screen.dart';
+import 'package:tripcrew/features/maps/presentation/trip_map_screen.dart';
 import 'package:tripcrew/features/memories/presentation/shared_memories_screen.dart';
 import 'package:tripcrew/features/trip_pay/presentation/trip_pay_screen.dart';
 import 'package:tripcrew/features/trip_pay/presentation/add_contribution_screen.dart';
@@ -89,7 +91,30 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/join-trip',
         name: 'join-trip',
         parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const JoinTripScreen(),
+        builder: (context, state) {
+          final code = state.uri.queryParameters['code'] ??
+              state.extra as String?;
+          return JoinTripScreen(initialCode: code);
+        },
+      ),
+      GoRoute(
+        path: '/join/:code',
+        name: 'join-code',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) {
+          final code = state.pathParameters['code'];
+          return JoinTripScreen(initialCode: code);
+        },
+      ),
+      GoRoute(
+        path: '/join',
+        name: 'join-query',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) {
+          final code = state.uri.queryParameters['code'] ??
+              state.uri.queryParameters['invite'];
+          return JoinTripScreen(initialCode: code);
+        },
       ),
 
       // Trip Workspace & Feature Modules
@@ -98,6 +123,12 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'workspace',
         parentNavigatorKey: rootNavigatorKey,
         builder: (context, state) => const TripWorkspaceScreen(),
+      ),
+            GoRoute(
+        path: '/chat',
+        name: 'chat',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const CrewChatScreen(),
       ),
       GoRoute(
         path: '/crew',
@@ -151,7 +182,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/map',
         name: 'map',
         parentNavigatorKey: rootNavigatorKey,
-        builder: (context, state) => const MapComingSoonScreen(),
+        builder: (context, state) => const TripMapScreen(),
+      ),
+      GoRoute(
+        path: '/trip-map',
+        name: 'trip-map',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const TripMapScreen(),
       ),
       GoRoute(
         path: '/pulse',
@@ -176,6 +213,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'recap',
         parentNavigatorKey: rootNavigatorKey,
         builder: (context, state) => const TripRecapScreen(),
+      ),
+      GoRoute(
+        path: '/budget-explorer',
+        name: 'budget-explorer',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const NearbyExplorerScreen(),
+      ),
+      GoRoute(
+        path: '/ai',
+        name: 'ai-assistant',
+        parentNavigatorKey: rootNavigatorKey,
+        builder: (context, state) => const AiAssistantScreen(),
       ),
 
       // Top-Level Persistent Bottom Navigation Shell (Home, Trips, Wallet, Explore, Profile)

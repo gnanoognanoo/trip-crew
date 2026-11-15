@@ -154,8 +154,8 @@ class LiveCrewService {
     if (defaultTargetPlatform == TargetPlatform.android) {
       locationSettings = AndroidSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 30, // Hardware-level filter (30 meters)
-        intervalDuration: const Duration(seconds: 15),
+        distanceFilter: 10, // Hardware-level filter (10 meters)
+        intervalDuration: const Duration(seconds: 10),
         foregroundNotificationConfig: ForegroundNotificationConfig(
           notificationTitle: 'TripCrew • Live Crew Sharing',
           notificationText: notifText,
@@ -167,7 +167,7 @@ class LiveCrewService {
     } else {
       locationSettings = const LocationSettings(
         accuracy: LocationAccuracy.high,
-        distanceFilter: 30,
+        distanceFilter: 10,
       );
     }
 
@@ -247,16 +247,16 @@ class LiveCrewService {
       position.longitude,
     );
 
-    if (elapsedSeconds < 15) {
+    if (elapsedSeconds < 8) {
       return;
     }
 
-    if (distanceMeters >= 30.0 && elapsedSeconds >= 15) {
+    if (distanceMeters >= 15.0 && elapsedSeconds >= 8) {
       await _writeLocationToFirestore(position);
       return;
     }
 
-    if (elapsedSeconds >= 120) {
+    if (elapsedSeconds >= 45) {
       await _writeLocationToFirestore(position);
       return;
     }
@@ -292,6 +292,11 @@ class LiveCrewService {
       'user_name': _activeDisplayName ?? 'Crew Member',
       'latitude': position.latitude,
       'longitude': position.longitude,
+      'accuracy': position.accuracy,
+      'is_sharing': true,
+      'sharing_mode': _activeSharingMode,
+      'sharing_until': _activeSharingUntil?.toIso8601String(),
+      'photo_url': _activePhotoUrl,
       'updated_at': DateTime.now().toIso8601String(),
     };
 
@@ -300,6 +305,41 @@ class LiveCrewService {
       developer.log('Live Crew location update sent', name: 'LiveCrewService');
     } catch (e) {
       developer.log('Live Crew upload failed: $e', name: 'LiveCrewService');
+    }
+  }
+
+  /// Directly saves a single location coordinate to Supabase for the current user and trip.
+  Future<void> updateSingleLocation({
+    required String tripId,
+    required String uid,
+    required String displayName,
+    required double latitude,
+    required double longitude,
+    double? accuracy,
+    String? photoUrl,
+  }) async {
+    if (!SupabaseService.isInitialized) return;
+
+    final data = {
+      'id': '${tripId}_$uid',
+      'trip_id': tripId,
+      'user_id': uid,
+      'user_name': displayName,
+      'latitude': latitude,
+      'longitude': longitude,
+      'accuracy': accuracy,
+      'is_sharing': true,
+      'sharing_mode': 'until_end_of_day',
+      'sharing_until': DateTime.now().add(const Duration(hours: 12)).toIso8601String(),
+      'photo_url': photoUrl,
+      'updated_at': DateTime.now().toIso8601String(),
+    };
+
+    try {
+      await SupabaseService.client.from('live_locations').upsert(data);
+      developer.log('Direct single location update sent for $displayName', name: 'LiveCrewService');
+    } catch (e) {
+      developer.log('Direct location upload failed: $e', name: 'LiveCrewService');
     }
   }
 

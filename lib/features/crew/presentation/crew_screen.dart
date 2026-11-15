@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/supabase_service.dart';
@@ -12,6 +11,7 @@ import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/auth/providers/auth_provider.dart';
 import 'package:tripcrew/features/crew/models/crew_member.dart';
 import 'package:tripcrew/features/trips/providers/trips_provider.dart';
+import 'package:tripcrew/features/trips/services/trip_share_service.dart';
 
 /// Screen 7: Crew Members screen connected to Supabase PostgreSQL trip_members table.
 class CrewScreen extends ConsumerStatefulWidget {
@@ -44,17 +44,35 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
       try {
         final res = await SupabaseService.client
             .from('trip_members')
-            .select('user_id, role, joined_at, profiles(display_name, photo_url)')
+            .select('user_id, role, joined_at')
             .eq('trip_id', activeTrip.id);
+
+        final uids = res.map((r) => r['user_id'] as String).toSet().toList();
+        final profileMap = <String, Map<String, dynamic>>{};
+        if (uids.isNotEmpty) {
+          try {
+            final profilesRes = await SupabaseService.client
+                .from('profiles')
+                .select('id, display_name, full_name, photo_url, avatar_url')
+                .inFilter('id', uids);
+            for (final p in profilesRes) {
+              final pid = p['id'] as String;
+              profileMap[pid] = p;
+            }
+          } catch (_) {}
+        }
 
         final loaded = <CrewMember>[];
         for (final row in res) {
           final uid = row['user_id'] as String;
           final role = row['role'] as String? ?? 'member';
           final joinedAtStr = row['joined_at'] as String?;
-          final profile = row['profiles'] as Map<String, dynamic>?;
-          final name = profile?['display_name'] as String? ?? 'Member';
-          final photo = profile?['photo_url'] as String?;
+          final profile = profileMap[uid];
+          final name = profile?['display_name'] as String? ??
+              profile?['full_name'] as String? ??
+              'Member';
+          final photo = profile?['photo_url'] as String? ??
+              profile?['avatar_url'] as String?;
 
           loaded.add(
             CrewMember(
@@ -115,36 +133,16 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
   }
 
   void _showQrDialog(String inviteCode) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Trip QR Code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 180,
-              height: 180,
-              child: QrImageView(
-                data: 'https://tripcrew.app/join/$inviteCode',
-                version: QrVersions.auto,
-                size: 180,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              inviteCode,
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
+    final activeTrip = ref.read(activeTripProvider);
+    TripShareService.showQrModal(
+      context,
+      inviteCode: inviteCode,
+      tripName: activeTrip?.name ?? 'Trip',
+      tripId: activeTrip?.id,
+      startingPlace: activeTrip?.startingPlace,
+      destination: activeTrip?.destination,
+      startDate: activeTrip?.startDate,
+      endDate: activeTrip?.endDate,
     );
   }
 
@@ -217,7 +215,7 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
         title: const Text('Crew Members'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
       ),
       body: SafeArea(
@@ -452,18 +450,11 @@ class _CrewScreenState extends ConsumerState<CrewScreen> {
                       _buildInviteOption(
                         context,
                         title: 'Link',
-                        icon: Icons.link_rounded,
+                        icon: Icons.share_rounded,
                         onTap: () {
-                          Clipboard.setData(
-                            ClipboardData(
-                              text: 'https://tripcrew.app/join/$inviteCode',
-                            ),
-                          );
-                          AnalyticsService.logInviteShared(activeTrip.id);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Invite link copied!'),
-                            ),
+                          TripShareService.shareTripInvite(
+                            trip: activeTrip,
+                            context: context,
                           );
                         },
                       ),

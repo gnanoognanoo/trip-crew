@@ -171,8 +171,6 @@ class SandboxTripPayProvider implements TripPayProvider {
         'exp_${DateTime.now().millisecondsSinceEpoch}_${initiatedByUid.hashCode.abs()}';
     final now = DateTime.now();
 
-    int currentContributed = 0;
-    int currentSpent = 0;
     int currentAvailable = 0;
 
     if (SupabaseService.isInitialized) {
@@ -184,8 +182,6 @@ class SandboxTripPayProvider implements TripPayProvider {
             .maybeSingle();
 
         if (summaryRes != null) {
-          currentContributed = (summaryRes['total_contributed_paise'] as num?)?.toInt() ?? 0;
-          currentSpent = (summaryRes['total_spent_paise'] as num?)?.toInt() ?? 0;
           currentAvailable = (summaryRes['available_balance_paise'] as num?)?.toInt() ?? 0;
         }
       } catch (_) {}
@@ -195,10 +191,56 @@ class SandboxTripPayProvider implements TripPayProvider {
       throw StateError('Insufficient Trip Pot balance.');
     }
 
+    if (SupabaseService.isInitialized) {
+      final res = await SupabaseService.client.rpc('spend_from_trip_pot', params: {
+        'p_trip_id': tripId,
+        'p_amount_paise': amountPaise,
+        'p_initiated_by_user_id': initiatedByUid,
+        'p_initiated_by_name': initiatedByName,
+        'p_description': description,
+        'p_category': category,
+        'p_merchant_name': merchantName,
+        'p_client_request_id': clientRequestId,
+      });
+
+      if (res != null) {
+        final Map<String, dynamic> rpcMap = Map<String, dynamic>.from(res as Map);
+        if (rpcMap['success'] == false) {
+          final errMsg = rpcMap['message'] as String? ??
+              rpcMap['error'] as String? ??
+              'Failed to spend from Trip Pot';
+          throw StateError(errMsg);
+        }
+
+        final txId = rpcMap['transaction_id'] as String? ??
+            'tx_${DateTime.now().millisecondsSinceEpoch}';
+        final balanceBefore = (rpcMap['balance_before'] as num?)?.toInt() ?? 0;
+        final balanceAfter = (rpcMap['balance_after'] as num?)?.toInt() ?? 0;
+
+        return TripPayTransaction(
+          id: txId,
+          tripId: tripId,
+          type: TripPayTransactionType.expense,
+          amountPaise: amountPaise,
+          initiatedByUid: initiatedByUid,
+          initiatedByName: initiatedByName,
+          category: category,
+          description: description,
+          merchantName: merchantName,
+          status: TripPayTransactionStatus.sandboxSuccess,
+          createdAt: DateTime.now(),
+          balanceBeforePaise: balanceBefore,
+          balanceAfterPaise: balanceAfter,
+          mode: 'sandbox',
+          clientRequestId: clientRequestId,
+        );
+      }
+    }
+
     final balanceBefore = currentAvailable;
     final balanceAfter = currentAvailable - amountPaise;
 
-    final newTx = TripPayTransaction(
+    return TripPayTransaction(
       id: txId,
       tripId: tripId,
       type: TripPayTransactionType.expense,
@@ -216,48 +258,6 @@ class SandboxTripPayProvider implements TripPayProvider {
       mode: 'sandbox',
       clientRequestId: clientRequestId,
     );
-
-    if (SupabaseService.isInitialized) {
-      try {
-        await SupabaseService.client.from('transactions').insert({
-          'id': txId,
-          'trip_id': tripId,
-          'type': 'EXPENSE',
-          'amount_paise': amountPaise,
-          'initiated_by_user_id': initiatedByUid,
-          'initiated_by_name': initiatedByName,
-          'category': category,
-          'description': description,
-          'status': 'SUCCESS',
-          'balance_before_paise': balanceBefore,
-          'balance_after_paise': balanceAfter,
-          'client_request_id': clientRequestId,
-          'created_at': now.toIso8601String(),
-        });
-
-        await SupabaseService.client.from('trip_pay_summary').upsert({
-          'trip_id': tripId,
-          'total_contributed_paise': currentContributed,
-          'total_spent_paise': currentSpent + amountPaise,
-          'available_balance_paise': balanceAfter,
-          'updated_at': now.toIso8601String(),
-        });
-
-        await SupabaseService.client.from('expenses').insert({
-          'id': expenseId,
-          'trip_id': tripId,
-          'title': description,
-          'amount_paise': amountPaise,
-          'paid_by_user_id': initiatedByUid,
-          'paid_by_name': '$initiatedByName (Trip Pot)',
-          'category': category,
-          'split_type': 'EQUAL',
-          'created_at': now.toIso8601String(),
-        });
-      } catch (_) {}
-    }
-
-    return newTx;
   }
 
   @override

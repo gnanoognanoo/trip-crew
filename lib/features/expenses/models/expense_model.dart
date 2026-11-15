@@ -57,10 +57,35 @@ class ExpenseModel {
       splitType: (map['splitType'] ?? map['split_type']) as String? ?? 'equal',
       createdBy: (map['createdBy'] ?? map['created_by']) as String? ?? '',
       createdAt: map['createdAt'] != null
-          ? DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now()
+          ? (DateTime.tryParse(map['createdAt'].toString()) ?? DateTime.now())
           : (map['created_at'] != null
-              ? DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now()
+              ? (DateTime.tryParse(map['created_at'].toString()) ?? DateTime.now())
               : DateTime.now()),
+    );
+  }
+
+  ExpenseModel copyWith({
+    String? description,
+    int? amountPaise,
+    String? category,
+    String? paidByUid,
+    String? paidByName,
+    List<String>? participantUids,
+    String? splitType,
+    String? createdBy,
+    DateTime? createdAt,
+  }) {
+    return ExpenseModel(
+      id: id,
+      description: description ?? this.description,
+      amountPaise: amountPaise ?? this.amountPaise,
+      category: category ?? this.category,
+      paidByUid: paidByUid ?? this.paidByUid,
+      paidByName: paidByName ?? this.paidByName,
+      participantUids: participantUids ?? this.participantUids,
+      splitType: splitType ?? this.splitType,
+      createdBy: createdBy ?? this.createdBy,
+      createdAt: createdAt ?? this.createdAt,
     );
   }
 }

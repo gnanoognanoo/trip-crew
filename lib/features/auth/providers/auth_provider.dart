@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tripcrew/core/errors/failure.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
 import 'package:tripcrew/core/services/firebase_service.dart';
@@ -50,6 +51,10 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  void setGuestUser(UserProfile profile) {
+    state = AuthState(user: profile, isLoading: false);
+  }
+
   void _init() {
     if (FirebaseService.isInitialized) {
       _authSubscription = FirebaseAuth.instance.authStateChanges().listen(
@@ -61,6 +66,23 @@ class AuthNotifier extends Notifier<AuthState> {
               firebaseUser.displayName,
             );
           } else {
+            // Restore persistent traveler guest session if previously generated
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              final travelerUid = prefs.getString('persistent_traveler_uid');
+              final travelerName = prefs.getString('persistent_traveler_name');
+              if (travelerUid != null && travelerUid.isNotEmpty) {
+                final guestProfile = UserProfile(
+                  uid: travelerUid,
+                  name: travelerName ?? 'Traveler',
+                  email: '$travelerUid@tripcrew.app',
+                  createdAt: DateTime.now(),
+                  updatedAt: DateTime.now(),
+                );
+                state = AuthState(user: guestProfile, isLoading: false);
+                return;
+              }
+            } catch (_) {}
             state = const AuthState(isLoading: false, user: null);
           }
         },
@@ -101,9 +123,9 @@ class AuthNotifier extends Notifier<AuthState> {
           );
           await SupabaseService.client.from('profiles').upsert({
             'id': uid,
-            'full_name': newProfile.name,
+            'display_name': newProfile.name,
             'email': email,
-            'avatar_url': null,
+            'photo_url': null,
             'created_at': DateTime.now().toIso8601String(),
             'updated_at': DateTime.now().toIso8601String(),
           });
@@ -424,6 +446,38 @@ class AuthNotifier extends Notifier<AuthState> {
     }
   }
 
+  Future<void> updateProfile({required String name, String? phone}) async {
+    if (state.user == null) return;
+    final updated = state.user!.copyWith(
+      name: name.trim(),
+      phone: phone?.trim(),
+    );
+    state = state.copyWith(user: updated);
+
+    if (SupabaseService.isInitialized) {
+      try {
+        await SupabaseService.client.from('profiles').update({
+          'display_name': name.trim(),
+          'full_name': name.trim(),
+          'phone': phone?.trim(),
+          'updated_at': DateTime.now().toIso8601String(),
+        }).eq('id', updated.uid);
+      } catch (_) {
+        try {
+          await SupabaseService.client.from('profiles').update({
+            'display_name': name.trim(),
+            'updated_at': DateTime.now().toIso8601String(),
+          }).eq('id', updated.uid);
+        } catch (_) {}
+      }
+    }
+    if (FirebaseService.isInitialized) {
+      try {
+        await FirebaseAuth.instance.currentUser?.updateDisplayName(name.trim());
+      } catch (_) {}
+    }
+  }
+
   Future<void> updateProfilePhoto(String photoUrl) async {
     if (state.user == null) return;
     final updated = state.user!.copyWith(photoUrl: photoUrl);
@@ -432,6 +486,7 @@ class AuthNotifier extends Notifier<AuthState> {
     if (SupabaseService.isInitialized) {
       try {
         await SupabaseService.client.from('profiles').update({
+          'photo_url': photoUrl,
           'avatar_url': photoUrl,
           'updated_at': DateTime.now().toIso8601String(),
         }).eq('id', updated.uid);
@@ -451,6 +506,11 @@ class AuthNotifier extends Notifier<AuthState> {
       } catch (_) {}
       await FirebaseAuth.instance.signOut();
     }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('persistent_traveler_uid');
+      await prefs.remove('persistent_traveler_name');
+    } catch (_) {}
     state = const AuthState(isLoading: false, user: null);
   }
 }

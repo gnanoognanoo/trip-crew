@@ -41,6 +41,43 @@
           ]
         }
       }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:540250477392:android:021dcdd5a6a4cf29ce9255",
+        "android_client_info": {
+          "package_name": "com.tripcrew.travelapp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "540250477392-p1v3thipukb7levs0fdagu7i1h5resp8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.tripcrew.travelapp",
+            "certificate_hash": "08d0b29b3f4f03ab88490e2bd8c0b80d665da992"
+          }
+        },
+        {
+          "client_id": "540250477392-b93lsaip4i32sgmimgcb54md47oiojcn.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRK0HyIN5JqbdTB0aqo3R3W93gSXnFJOE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "540250477392-b93lsaip4i32sgmimgcb54md47oiojcn.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
     }
   ],
   "configuration_version": "1"

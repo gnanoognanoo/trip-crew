@@ -2,20 +2,56 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:tripcrew/app/theme.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/analytics_service.dart';
+import 'package:tripcrew/core/widgets/tripcrew_motion.dart';
 import 'package:tripcrew/features/trips/models/trip_model.dart';
+import 'package:tripcrew/features/trips/services/trip_share_service.dart';
 
-/// Screen 5: Trip Created confirmation screen with invite code copy & share.
-class TripCreatedScreen extends StatelessWidget {
+/// Screen 5: Professional, aesthetic, and live Trip Created confirmation screen.
+class TripCreatedScreen extends StatefulWidget {
   final TripModel trip;
 
   const TripCreatedScreen({super.key, required this.trip});
 
   @override
+  State<TripCreatedScreen> createState() => _TripCreatedScreenState();
+}
+
+class _TripCreatedScreenState extends State<TripCreatedScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..repeat(reverse: true);
+
+    _pulseAnimation = Tween<double>(begin: 0.4, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final dateFormat = DateFormat('dd - dd MMM yyyy');
+    final isDark = theme.brightness == Brightness.dark;
+    final dateFormat = DateFormat('dd MMM yyyy');
+
+    final dateRangeText = widget.trip.endDate.isAfter(widget.trip.startDate)
+        ? '${dateFormat.format(widget.trip.startDate)} – ${dateFormat.format(widget.trip.endDate)}'
+        : dateFormat.format(widget.trip.startDate);
 
     return Scaffold(
       appBar: AppBar(
@@ -25,126 +61,297 @@ class TripCreatedScreen extends StatelessWidget {
         ),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: AppConstants.spaceLg),
           child: Column(
             children: [
-              const Spacer(flex: 1),
-              // Celebration Graphic
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.celebration_rounded,
-                  size: 48,
-                  color: Color(0xFF10B981),
+              const SizedBox(height: AppConstants.spaceMd),
+
+              // Architectural Stamp Emblem with Bobbing Accent
+              Center(
+                child: Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: isDark ? AppTheme.raisedSurface : const Color(0xFFEFEADB),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: AppTheme.trailCoral.withValues(alpha: 0.6),
+                      width: 2.0,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.trailCoral.withValues(alpha: 0.15),
+                        blurRadius: 18,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: BobbingSticker(
+                      distance: 3,
+                      duration: Duration(milliseconds: 2200),
+                      child: Text('🧭', style: TextStyle(fontSize: 36)),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: AppConstants.spaceLg),
+
+              // Title & Subtitle
               Text(
                 'Trip Created!',
                 style: theme.textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
+                  letterSpacing: -0.4,
                 ),
               ),
-              const SizedBox(height: AppConstants.spaceXs),
+              const SizedBox(height: 6),
               Text(
-                'Your trip has been created successfully',
+                'Your shared crew workspace is live and ready.',
+                textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
+                  fontSize: 14,
                 ),
               ),
               const SizedBox(height: AppConstants.spaceXl),
 
-              // Trip Summary Card
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(AppConstants.spaceMd),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(
-                            AppConstants.radiusMd,
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.travel_explore_rounded,
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      const SizedBox(width: AppConstants.spaceMd),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              trip.name,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              '${trip.startingPlace} → ${trip.destination}',
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurfaceVariant,
-                                fontSize: 13,
-                              ),
-                            ),
-                            Text(
-                              dateFormat.format(trip.startDate),
-                              style: TextStyle(
-                                color: theme.colorScheme.primary,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+              // Immersive Live Trip Card
+              Container(
+                decoration: BoxDecoration(
+                  color: isDark ? AppTheme.raisedSurface : Colors.white,
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMd),
+                  border: Border.all(
+                    color: isDark ? AppTheme.borderDark : AppTheme.borderLight,
+                    width: 1.0,
                   ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Top Bar with Live Indicator & Expedition Tag
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          // Live Pulsing Dot
+                          Row(
+                            children: [
+                              AnimatedBuilder(
+                                animation: _pulseAnimation,
+                                builder: (context, child) {
+                                  return Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: const Color(0xFF22C55E).withValues(
+                                        alpha: _pulseAnimation.value,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: const Color(0xFF22C55E).withValues(
+                                            alpha: _pulseAnimation.value * 0.6,
+                                          ),
+                                          blurRadius: 6,
+                                          spreadRadius: 1,
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(width: 8),
+                              const Text(
+                                'LIVE EXPEDITION',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.2,
+                                  color: Color(0xFF22C55E),
+                                ),
+                              ),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF1F2533)
+                                  : const Color(0xFFF1EFEA),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              widget.trip.tripType.toUpperCase(),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.8,
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const Divider(height: 1, thickness: 1),
+
+                    // Main Content: Trip Name, Route & Schedule
+                    Padding(
+                      padding: const EdgeInsets.all(AppConstants.spaceLg),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.trip.name,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+
+                          // Route visualization
+                          Row(
+                            children: [
+                              // Starting place
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'FROM',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.0,
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      widget.trip.startingPlace.isNotEmpty
+                                          ? widget.trip.startingPlace
+                                          : 'Origin',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              // Route connector
+                              const Padding(
+                                padding: EdgeInsets.symmetric(horizontal: 10),
+                                child: DottedRouteLine(
+                                  color: AppTheme.pine,
+                                  dotColor: AppTheme.sage,
+                                  emoji: '✈️',
+                                ),
+                              ),
+
+                              // Destination
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      'DESTINATION',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 1.0,
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      widget.trip.destination,
+                                      textAlign: TextAlign.end,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Date bar
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.calendar_today_rounded,
+                                size: 14,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                dateRangeText,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const SizedBox(height: AppConstants.spaceLg),
 
-              // Invite Code Section
+              // Crew Access Section
               Text(
                 'Invite your crew',
                 style: theme.textTheme.bodySmall?.copyWith(
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
               const SizedBox(height: AppConstants.spaceSm),
+
+              // Code Box
               Container(
+                width: double.infinity,
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
+                  horizontal: 20,
                   vertical: 14,
                 ),
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(AppConstants.radiusLg),
+                  color: isDark ? AppTheme.raisedSurface : Colors.white,
+                  borderRadius: BorderRadius.circular(AppConstants.radiusMd),
                   border: Border.all(
-                    color: theme.colorScheme.outlineVariant,
-                    width: 1.5,
+                    color: isDark ? AppTheme.borderDark : AppTheme.borderLight,
+                    width: 1.0,
                   ),
                 ),
-                child: Text(
-                  trip.inviteCode,
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 2.0,
-                    color: theme.colorScheme.primary,
+                child: Center(
+                  child: Text(
+                    widget.trip.inviteCode,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.w900,
+                      fontSize: 22,
+                      letterSpacing: 3.0,
+                      color: isDark ? AppTheme.softSage : AppTheme.pine,
+                    ),
                   ),
                 ),
               ),
@@ -156,8 +363,8 @@ class TripCreatedScreen extends StatelessWidget {
                   Expanded(
                     child: OutlinedButton.icon(
                       onPressed: () {
-                        Clipboard.setData(ClipboardData(text: trip.inviteCode));
-                        AnalyticsService.logInviteShared(trip.id);
+                        Clipboard.setData(ClipboardData(text: widget.trip.inviteCode));
+                        AnalyticsService.logInviteShared(widget.trip.id);
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text('Invite code copied to clipboard!'),
@@ -172,13 +379,9 @@ class TripCreatedScreen extends StatelessWidget {
                   Expanded(
                     child: FilledButton.icon(
                       onPressed: () {
-                        AnalyticsService.logInviteShared(trip.id);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              'Sharing invite code ${trip.inviteCode}...',
-                            ),
-                          ),
+                        TripShareService.shareTripInvite(
+                          trip: widget.trip,
+                          context: context,
                         );
                       },
                       icon: const Icon(Icons.share_rounded, size: 18),
@@ -186,6 +389,28 @@ class TripCreatedScreen extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: AppConstants.spaceSm),
+
+              // Show QR Code & Share Option
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    TripShareService.showQrModal(
+                      context,
+                      inviteCode: widget.trip.inviteCode,
+                      tripName: widget.trip.name,
+                      tripId: widget.trip.id,
+                      startingPlace: widget.trip.startingPlace,
+                      destination: widget.trip.destination,
+                      startDate: widget.trip.startDate,
+                      endDate: widget.trip.endDate,
+                    );
+                  },
+                  icon: const Icon(Icons.qr_code_2_rounded, size: 20),
+                  label: const Text('Show QR Code & Share'),
+                ),
               ),
               const SizedBox(height: AppConstants.spaceMd),
 
@@ -195,7 +420,7 @@ class TripCreatedScreen extends StatelessWidget {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              const Spacer(flex: 2),
+              const SizedBox(height: AppConstants.spaceXl),
 
               // Done Button
               SizedBox(

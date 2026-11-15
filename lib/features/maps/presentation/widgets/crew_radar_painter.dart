@@ -27,17 +27,38 @@ class CrewRadarPainter extends CustomPainter {
     final maxRadius = math.min(size.width, size.height) / 2 - 24;
 
     // 1. Calculate dynamic scale (max distance to represent on radar)
-    double maxDistance = 500.0; // Default 500 meters
+    double maxDistance = 250.0;
+    double highestDistance = 0.0;
     for (final d in distances.values) {
-      if (d > maxDistance) {
-        maxDistance = d;
+      if (d > highestDistance) {
+        highestDistance = d;
       }
     }
-    // Round up to clean increments (e.g. 500m, 1000m, 2000m, 5000m)
-    if (maxDistance > 2000) {
-      maxDistance = (maxDistance / 1000).ceil() * 1000.0;
-    } else if (maxDistance > 500) {
-      maxDistance = (maxDistance / 500).ceil() * 500.0;
+
+    if (highestDistance > 0) {
+      // Add 20% margin so blips are not cropped on the outer edge
+      final target = highestDistance * 1.2;
+      if (target <= 100) {
+        maxDistance = 100.0;
+      } else if (target <= 250) {
+        maxDistance = 250.0;
+      } else if (target <= 500) {
+        maxDistance = 500.0;
+      } else if (target <= 1000) {
+        maxDistance = 1000.0;
+      } else if (target <= 2500) {
+        maxDistance = 2500.0;
+      } else if (target <= 5000) {
+        maxDistance = 5000.0;
+      } else if (target <= 10000) {
+        maxDistance = 10000.0;
+      } else if (target <= 25000) {
+        maxDistance = 25000.0;
+      } else if (target <= 50000) {
+        maxDistance = 50000.0;
+      } else {
+        maxDistance = (target / 10000).ceil() * 10000.0;
+      }
     }
 
     // 2. Draw Radar Background Gradient

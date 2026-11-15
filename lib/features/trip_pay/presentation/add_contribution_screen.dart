@@ -28,12 +28,18 @@ class AddContributionScreen extends ConsumerStatefulWidget {
 class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
   final _amountController = TextEditingController();
   String? _clientRequestId;
+  bool _hasPrefilledAmount = false;
 
   @override
   void initState() {
     super.initState();
     _clientRequestId =
         'ctr_${DateTime.now().millisecondsSinceEpoch}_${DateTime.now().microsecond}';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
+    });
     final activeTrip = ref.read(activeTripProvider);
     if (activeTrip != null) {
       AnalyticsService.logTripPotContributionStarted(activeTrip.id);
@@ -112,15 +118,17 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
         onSuccess: () {
           AnalyticsService.logTripPotContributionCompleted(activeTrip.id);
           Navigator.pop(sheetCtx, true);
+          ScaffoldMessenger.of(context).clearSnackBars();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
                 'Added ${CurrencyFormatter.formatUnits(amountPaise)} to the Trip Pot!',
               ),
               backgroundColor: const Color(0xFF10B981),
+              duration: const Duration(seconds: 3),
             ),
           );
-          context.pop();
+          context.pop(true);
         },
         onCancelOrFailed: (reason) {
           Navigator.pop(sheetCtx, false);
@@ -158,10 +166,17 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
         ? (activeTrip.budget / resolvedCrewCount).roundToDouble()
         : null;
 
-    if (_amountController.text.isEmpty &&
+    if (!_hasPrefilledAmount &&
         suggestedAmount != null &&
         suggestedAmount > 0) {
-      _amountController.text = suggestedAmount.toStringAsFixed(0);
+      _hasPrefilledAmount = true;
+      if (_amountController.text.isEmpty) {
+        _amountController.text = suggestedAmount.toStringAsFixed(0);
+        _amountController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _amountController.text.length,
+        );
+      }
     }
 
     final isRazorpayMode = tripPayState.providerType == PaymentProviderType.razorpay;
@@ -175,7 +190,7 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
         ),
       ),
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: AppConstants.spaceLg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,12 +282,46 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
                   decimal: true,
                 ),
                 enabled: !tripPayState.isProcessing,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   prefixText: '₹ ',
-                  border: OutlineInputBorder(),
+                  border: const OutlineInputBorder(),
                   hintText: 'Enter amount',
+                  suffixIcon: _amountController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 20),
+                          tooltip: 'Clear amount',
+                          onPressed: () {
+                            _amountController.clear();
+                            setState(() {});
+                          },
+                        )
+                      : null,
                 ),
-                onChanged: (_) => setState(() {}),
+                onChanged: (_) {
+                  _hasPrefilledAmount = true;
+                  setState(() {});
+                },
+              ),
+              const SizedBox(height: AppConstants.spaceSm),
+
+              // Quick Amount Preset Chips
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  _quickAmountChip(500),
+                  _quickAmountChip(1000),
+                  _quickAmountChip(2000),
+                  if (suggestedAmount != null &&
+                      suggestedAmount > 0 &&
+                      suggestedAmount != 500 &&
+                      suggestedAmount != 1000 &&
+                      suggestedAmount != 2000)
+                    _quickAmountChip(
+                      suggestedAmount.round(),
+                      label: 'Suggested (₹${suggestedAmount.toStringAsFixed(0)})',
+                    ),
+                ],
               ),
               const SizedBox(height: AppConstants.spaceMd),
 
@@ -316,14 +365,14 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
                 ),
               ),
 
-              const Spacer(),
+              const SizedBox(height: AppConstants.spaceLg),
 
               // Pay Button
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
                   icon: const Icon(Icons.account_balance_wallet_outlined),
-                  onPressed: tripPayState.isProcessing
+                  onPressed: tripPayState.isProcessing || _amountPaise <= 0
                       ? null
                       : _startContributionFlow,
                   label: tripPayState.isProcessing
@@ -336,7 +385,9 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
                           ),
                         )
                       : Text(
-                          'Pay ${CurrencyFormatter.formatUnits(_totalPaise)} ${isRazorpayMode ? "with Razorpay" : "with UPI"}',
+                          _amountPaise <= 0
+                              ? 'Enter Contribution Amount'
+                              : 'Pay ${CurrencyFormatter.formatUnits(_totalPaise)} ${isRazorpayMode ? "with Razorpay" : "with UPI"}',
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                 ),
@@ -346,6 +397,31 @@ class _AddContributionScreenState extends ConsumerState<AddContributionScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _quickAmountChip(int amount, {String? label}) {
+    final currentAmount = double.tryParse(_amountController.text);
+    final isSelected = currentAmount == amount.toDouble();
+    return ActionChip(
+      label: Text(label ?? '₹$amount'),
+      backgroundColor: isSelected
+          ? Theme.of(context).colorScheme.primaryContainer
+          : null,
+      labelStyle: TextStyle(
+        fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+        color: isSelected
+            ? Theme.of(context).colorScheme.onPrimaryContainer
+            : null,
+      ),
+      onPressed: () {
+        _hasPrefilledAmount = true;
+        _amountController.text = amount.toString();
+        _amountController.selection = TextSelection.fromPosition(
+          TextPosition(offset: _amountController.text.length),
+        );
+        setState(() {});
+      },
     );
   }
 
@@ -527,6 +603,15 @@ class _UpiPaymentSheetState extends ConsumerState<_UpiPaymentSheet> {
 
   void _handlePaymentError(PaymentFailureResponse response) {
     if (!mounted) return;
+    final realAttemptId = widget.intent.metadata['paymentAttemptId'] as String? ??
+        widget.intent.metadata['payment_attempt_id'] as String? ??
+        widget.intent.id;
+    ref.read(tripPayProvider.notifier).cancelPendingAttempt(
+          attemptId: realAttemptId,
+          tripId: widget.tripId,
+          reason: response.message ??
+              'Payment failed or was cancelled at checkout (Code ${response.code})',
+        );
     setState(() {
       _state = _SheetState.failed;
       _errorMessage = response.message ??

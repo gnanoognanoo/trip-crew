@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 import 'package:tripcrew/core/services/live_crew_service.dart';
-import 'package:tripcrew/core/widgets/app_error_state.dart';
 import 'package:tripcrew/features/maps/models/live_location_model.dart';
 import 'package:tripcrew/features/maps/presentation/widgets/crew_radar_painter.dart';
 import 'package:tripcrew/features/maps/providers/live_crew_provider.dart';
@@ -430,17 +429,6 @@ class _LiveCrewLocationScreenState extends ConsumerState<LiveCrewLocationScreen>
       );
     }
 
-    if (crewState.errorMessage != null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Live Crew Location')),
-        body: AppErrorState(
-          title: 'Location Sync Error',
-          message: crewState.errorMessage!,
-          onRetry: () => ref.invalidate(liveCrewProvider),
-        ),
-      );
-    }
-
     final activeDistances = crewState.distances;
     final groupStatus = crewState.groupStatus;
 
@@ -449,7 +437,7 @@ class _LiveCrewLocationScreenState extends ConsumerState<LiveCrewLocationScreen>
         title: const Text('Live Crew Location'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () { if (context.canPop()) { context.pop(); } else { context.go('/workspace'); } },
         ),
         actions: [
           IconButton(

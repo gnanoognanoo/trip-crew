@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:tripcrew/core/constants/app_constants.dart';
 
-/// Screen 1: Welcome / Onboarding screen.
+/// Screen 1: Welcome / Onboarding screen with professional, aesthetic, and live travel ambiance.
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({super.key});
 
@@ -13,16 +13,16 @@ class WelcomeScreen extends StatelessWidget {
     return Scaffold(
       body: Stack(
         children: [
-          // Background Gradient Image simulation
+          // Deep Obsidian Atmospheric Matte
           Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Color(0xFF1E6091),
-                  Color(0xFF184E77),
-                  Color(0xFF0F172A),
+                  Color(0xFF1E242E),
+                  Color(0xFF13171F),
+                  Color(0xFF0C0E12),
                 ],
               ),
             ),
@@ -36,17 +36,31 @@ class WelcomeScreen extends StatelessWidget {
               child: Column(
                 children: [
                   const Spacer(flex: 1),
-                  // Brand Logo & Title
+                  // Official TripCrew Compass Emblem
                   Container(
-                    padding: const EdgeInsets.all(20),
+                    width: 110,
+                    height: 110,
+                    padding: const EdgeInsets.all(8),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
+                      color: const Color(0xFFF8F4EC),
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: const Color(0xFFD6C2A5),
+                        width: 2.0,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
                     ),
-                    child: const Icon(
-                      Icons.landscape_rounded,
-                      size: 64,
-                      color: Colors.white,
+                    child: ClipOval(
+                      child: Image.asset(
+                        'assets/images/logo.png',
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                   const SizedBox(height: AppConstants.spaceLg),
@@ -68,15 +82,15 @@ class WelcomeScreen extends StatelessWidget {
                           vertical: 3,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B),
-                          borderRadius: BorderRadius.circular(8),
+                          color: const Color(0xFFD97706),
+                          borderRadius: BorderRadius.circular(6),
                         ),
                         child: const Text(
                           'BETA',
                           style: TextStyle(
-                            color: Colors.black,
+                            color: Colors.white,
                             fontSize: 10,
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w800,
                             letterSpacing: 1.0,
                           ),
                         ),
@@ -87,25 +101,26 @@ class WelcomeScreen extends StatelessWidget {
                   Text(
                     AppConstants.appTagline,
                     style: theme.textTheme.labelMedium?.copyWith(
-                      color: const Color(0xFFFFB4A4),
+                      color: const Color(0xFFA1A1AA),
                       fontWeight: FontWeight.w600,
                       letterSpacing: 1.2,
                     ),
                   ),
                   const Spacer(flex: 2),
-                  // Hero Subtitle
+                  // Hero Description Card
                   Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
+                      horizontal: 24,
+                      vertical: 20,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
+                      color: const Color(0xFF141821),
                       borderRadius: BorderRadius.circular(
                         AppConstants.radiusLg,
                       ),
                       border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.2),
+                        color: const Color(0xFF283142),
+                        width: 1.0,
                       ),
                     ),
                     child: Column(
@@ -114,6 +129,7 @@ class WelcomeScreen extends StatelessWidget {
                           'Travel Better Together',
                           style: theme.textTheme.headlineSmall?.copyWith(
                             fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3,
                             color: Colors.white,
                           ),
                         ),
@@ -122,7 +138,8 @@ class WelcomeScreen extends StatelessWidget {
                           'One shared workspace for your group from planning to memories.',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.bodyMedium?.copyWith(
-                            color: Colors.white.withValues(alpha: 0.85),
+                            color: const Color(0xFFA1A1AA),
+                            height: 1.4,
                           ),
                         ),
                       ],
@@ -134,9 +151,10 @@ class WelcomeScreen extends StatelessWidget {
                     width: double.infinity,
                     child: FilledButton(
                       style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF1A73E8),
+                        backgroundColor: const Color(0xFFE25822),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(
                             AppConstants.radiusMd,
@@ -149,6 +167,7 @@ class WelcomeScreen extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
+                          letterSpacing: 0.2,
                         ),
                       ),
                     ),

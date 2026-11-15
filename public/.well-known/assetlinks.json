@@ -1,0 +1,14 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.tripcrew.travelapp",
+      "sha256_cert_fingerprints": [
+        "3B:DA:0D:CA:71:51:96:07:70:54:F1:31:F1:DA:BA:2A:CF:DD:74:EE:26:92:20:7D:E2:4A:84:F1:78:CF:80:63",
+        "E1:F0:26:B3:5F:C4:F9:85:20:15:B6:CA:21:9A:2C:A8:32:3F:41:58:1D:70:F8:CD:A1:EA:20:7D:8A:96:E4:26"
+      ]
+    }
+  }
+]
+
